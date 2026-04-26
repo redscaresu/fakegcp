@@ -171,7 +171,7 @@ Three columns: **Handler** = HTTP routes wired, **Tests** = `handlers/handlers_t
 | Cloud SQL (instances, databases, users) | ✅ | ✅ | [`examples/working/cloud_sql`](examples/working/cloud_sql) | private + public IP configurations |
 | IAM (service accounts, policies, sa-keys, bindings) | ✅ | ✅ | [`examples/working/iam`](examples/working/iam) | fully-qualified `serviceAccount:` principals |
 | Storage (buckets) | ✅ | ✅ | [`examples/working/storage`](examples/working/storage) | uniform bucket-level access, encryption |
-| Pub/Sub (topics, subscriptions) | ✅ | ✅ FK | [`examples/working/pubsub`](examples/working/pubsub) | subscription topic immutable on PATCH; topic delete blocked while subscriptions exist |
+| Pub/Sub (topics, subscriptions) | ✅ | ✅ FK | [`examples/working/pubsub`](examples/working/pubsub) | subscription topic immutable on PATCH; topic delete succeeds and subscriptions survive (real Pub/Sub orphan semantics) |
 | DNS (managed zones, record sets) | ✅ | ✅ FK | [`examples/working/dns`](examples/working/dns) | mutations via v1 transactional changes; zone delete refused while rrsets exist |
 | Cloud Run (services) | ✅ | ✅ CRUD | [`examples/working/cloud_run`](examples/working/cloud_run) | TestCloudRunServiceCRUD |
 | Secret Manager (secrets, versions) | ✅ | ✅ FK + cascade | [`examples/working/secret_manager`](examples/working/secret_manager) | TestSecretCRUD, TestSecretVersionCRUD, TestSecretDeleteWithVersions |

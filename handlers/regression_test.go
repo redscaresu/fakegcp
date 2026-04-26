@@ -105,12 +105,21 @@ func TestGetDNSChangeReturnsRecordedChange(t *testing.T) {
 	assert.Equal(t, "done", body["status"])
 }
 
-// TestGetDNSChange404ForUnknownID guards the change-id lookup contract:
-// an arbitrary id that was never recorded must 404, not silently
-// fabricate a `done` response.
+// TestGetDNSChange404ForUnknownID guards the change-id lookup
+// contract: an arbitrary id that was never recorded must 404,
+// not silently fabricate a `done` response. The parent zone is
+// seeded first so requireDNSZone doesn't 404 the request before
+// it reaches the change-id lookup — that would let this test
+// pass for the wrong reason.
 func TestGetDNSChange404ForUnknownID(t *testing.T) {
 	srv, cleanup := testutil.NewTestServer(t)
 	defer cleanup()
+
+	mustCreate(t, srv, "/dns/v1/projects/"+project+"/managedZones", map[string]any{
+		"name":       "zone1",
+		"dnsName":    "zone1.invalid.",
+		"visibility": "public",
+	})
 
 	resp, _ := testutil.DoGet(t, srv, "/dns/v1/projects/"+project+"/managedZones/zone1/changes/never-existed")
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
