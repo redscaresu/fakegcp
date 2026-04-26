@@ -267,6 +267,42 @@ func TestLBChainUpdateFKValidation(t *testing.T) {
 		})
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 	})
+
+	t.Run("forwardingRule create accepts literal IPv6 in IPAddress", func(t *testing.T) {
+		resp, _ := testutil.DoCreate(t, srv, testutil.ComputePath(project, "global", "forwardingRules"), map[string]any{
+			"name":      "fr-literal-ipv6",
+			"target":    "good-thp",
+			"IPAddress": "2001:db8::1",
+			"portRange": "443",
+		})
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+	})
+
+	t.Run("forwardingRule create accepts same-project relative IPAddress path", func(t *testing.T) {
+		mustCreate(t, srv, testutil.ComputePath(project, "global", "addresses"), map[string]any{
+			"name": "lb-rel-ip",
+		})
+		resp, _ := testutil.DoCreate(t, srv, testutil.ComputePath(project, "global", "forwardingRules"), map[string]any{
+			"name":      "fr-relative-ip",
+			"target":    "good-thp",
+			"IPAddress": "projects/" + project + "/global/addresses/lb-rel-ip",
+			"portRange": "443",
+		})
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+	})
+
+	t.Run("forwardingRule create accepts absolute self-link IPAddress", func(t *testing.T) {
+		mustCreate(t, srv, testutil.ComputePath(project, "global", "addresses"), map[string]any{
+			"name": "lb-abs-ip",
+		})
+		resp, _ := testutil.DoCreate(t, srv, testutil.ComputePath(project, "global", "forwardingRules"), map[string]any{
+			"name":      "fr-abs-ip",
+			"target":    "good-thp",
+			"IPAddress": "https://www.googleapis.com/compute/v1/projects/" + project + "/global/addresses/lb-abs-ip",
+			"portRange": "443",
+		})
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+	})
 }
 
 // mustCreate wraps DoCreate with a require on a 200, so test setup
