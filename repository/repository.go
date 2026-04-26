@@ -2388,6 +2388,25 @@ func (r *Repository) DeleteSecretVersion(name string) error {
 	return r.deleteWithResult(`DELETE FROM secretmanager_versions WHERE name = ?`, name)
 }
 
+// SetSecretVersionState transitions a version's `state` field
+// (ENABLED, DISABLED, DESTROYED) and persists the change so a
+// subsequent GetSecretVersion sees the new value.
+func (r *Repository) SetSecretVersionState(name, state string) (map[string]any, error) {
+	current, err := r.GetSecretVersion(name)
+	if err != nil {
+		return nil, err
+	}
+	current["state"] = state
+	raw, err := marshalData(current)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := r.db.Exec(`UPDATE secretmanager_versions SET data = ? WHERE name = ?`, string(raw), name); err != nil {
+		return nil, mapInsertError(err)
+	}
+	return current, nil
+}
+
 func (r *Repository) CreateTopic(project string, data map[string]any) (map[string]any, error) {
 	name := extractNameFromSelfLink(getString(data, "name"))
 	if name == "" {

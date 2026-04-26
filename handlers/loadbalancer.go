@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/redscaresu/fakegcp/models"
 )
 
 func globalResourceLink(r *http.Request, project, collection, name string) string {
@@ -560,10 +561,11 @@ func (app *Application) DeleteGlobalForwardingRule(w http.ResponseWriter, r *htt
 
 // SetLabelsGlobal handles the {resource}/{name}/setLabels POST that
 // terraform-provider-google issues for every global compute resource
-// it creates, even when no labels are configured. We don't model
-// labels per-resource yet, so the handler accepts the call and returns
-// a DONE operation. Body shape is {labels: {...}, labelFingerprint:
-// "..."}; we ignore the contents.
+// it creates, even when no labels are configured. Body shape is
+// {labels: {...}, labelFingerprint: "..."}; we don't yet model labels
+// per resource, but we verify the target exists so a typo'd self-link
+// or wrong-collection URL surfaces as a 404 instead of a misleading
+// success — same as the real Compute API.
 func (app *Application) SetLabelsGlobal(w http.ResponseWriter, r *http.Request) {
 	project := chi.URLParam(r, "project")
 	collection := chi.URLParam(r, "collection")
@@ -572,6 +574,48 @@ func (app *Application) SetLabelsGlobal(w http.ResponseWriter, r *http.Request) 
 		writeGCPError(w, http.StatusBadRequest, "Invalid JSON body", "invalid")
 		return
 	}
+	if err := app.assertGlobalResourceExists(project, collection, name); err != nil {
+		writeDomainError(w, err)
+		return
+	}
 	target := globalResourceLink(r, project, collection, name)
 	writeJSON(w, http.StatusOK, app.newOperation(r, project, "", "", target, "setLabels"))
+}
+
+// assertGlobalResourceExists returns models.ErrNotFound if the named
+// global compute resource does not exist. Only collections that
+// already have a Get/Delete handler are listed here — anything else
+// (including a typo'd collection) falls through to ErrNotFound so
+// the caller surfaces a 404.
+func (app *Application) assertGlobalResourceExists(project, collection, name string) error {
+	switch collection {
+	case "addresses":
+		_, err := app.repo.GetGlobalAddress(project, name)
+		return err
+	case "healthChecks":
+		_, err := app.repo.GetHealthCheck(project, name)
+		return err
+	case "backendServices":
+		_, err := app.repo.GetBackendService(project, name)
+		return err
+	case "urlMaps":
+		_, err := app.repo.GetURLMap(project, name)
+		return err
+	case "sslCertificates":
+		_, err := app.repo.GetSSLCertificate(project, name)
+		return err
+	case "targetHttpsProxies":
+		_, err := app.repo.GetTargetHTTPSProxy(project, name)
+		return err
+	case "forwardingRules":
+		_, err := app.repo.GetGlobalForwardingRule(project, name)
+		return err
+	case "networks":
+		_, err := app.repo.GetNetwork(project, name)
+		return err
+	case "firewalls":
+		_, err := app.repo.GetFirewall(project, name)
+		return err
+	}
+	return models.ErrNotFound
 }

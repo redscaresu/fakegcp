@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/redscaresu/fakegcp/models"
@@ -16,10 +17,35 @@ import (
 
 type Application struct {
 	repo *repository.Repository
+
+	dnsChangesMu sync.RWMutex
+	dnsChanges   map[string]map[string]any
 }
 
 func NewApplication(repo *repository.Repository) *Application {
-	return &Application{repo: repo}
+	return &Application{
+		repo:       repo,
+		dnsChanges: map[string]map[string]any{},
+	}
+}
+
+// recordDNSChange caches a change record by id so GetDNSChange can
+// return it later. Cloud DNS retains change history per zone forever
+// in production; the in-memory cache here is good enough for tests.
+func (app *Application) recordDNSChange(change map[string]any) {
+	id, _ := change["id"].(string)
+	if id == "" {
+		return
+	}
+	app.dnsChangesMu.Lock()
+	defer app.dnsChangesMu.Unlock()
+	app.dnsChanges[id] = change
+}
+
+func (app *Application) lookupDNSChange(id string) map[string]any {
+	app.dnsChangesMu.RLock()
+	defer app.dnsChangesMu.RUnlock()
+	return app.dnsChanges[id]
 }
 
 func decodeBody(r *http.Request) (map[string]any, error) {

@@ -173,7 +173,22 @@ func (app *Application) CreateDNSChange(w http.ResponseWriter, r *http.Request) 
 		writeGCPError(w, http.StatusBadRequest, "Invalid JSON body", "invalid")
 		return
 	}
+
+	// Real Cloud DNS changes are atomic: a change either applies in full
+	// or doesn't apply at all. We approximate this by validating every
+	// addition + deletion up-front and snapshotting the records we'd
+	// remove before touching state, so any failure mid-apply can roll
+	// the change back.
 	deletions, _ := body["deletions"].([]any)
+	additions, _ := body["additions"].([]any)
+
+	type rrset struct {
+		name  string
+		rtype string
+		entry map[string]any // populated for deletions only (rollback)
+	}
+
+	pendingDeletions := make([]rrset, 0, len(deletions))
 	for _, d := range deletions {
 		entry, _ := d.(map[string]any)
 		if entry == nil {
@@ -182,14 +197,16 @@ func (app *Application) CreateDNSChange(w http.ResponseWriter, r *http.Request) 
 		name, _ := entry["name"].(string)
 		rrtype, _ := entry["type"].(string)
 		if name == "" || rrtype == "" {
-			continue
-		}
-		if err := app.repo.DeleteDNSRecordSet(project, zone, name, rrtype); err != nil {
-			writeDomainError(w, err)
+			writeGCPError(w, http.StatusBadRequest, "Missing required field: name/type in deletion", "required")
 			return
 		}
+		// Snapshot the existing rrset so we can re-create it on rollback.
+		// A miss is fine: nothing to roll back.
+		current, _ := app.repo.GetDNSRecordSet(project, zone, name, rrtype)
+		pendingDeletions = append(pendingDeletions, rrset{name: name, rtype: rrtype, entry: current})
 	}
-	additions, _ := body["additions"].([]any)
+
+	pendingAdditions := make([]map[string]any, 0, len(additions))
 	for _, a := range additions {
 		entry, _ := a.(map[string]any)
 		if entry == nil {
@@ -202,31 +219,72 @@ func (app *Application) CreateDNSChange(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		entry["kind"] = "dns#resourceRecordSet"
-		if _, err := app.repo.CreateDNSRecordSet(project, zone, entry); err != nil {
-			writeCreateError(w, err)
-			return
+		pendingAdditions = append(pendingAdditions, entry)
+	}
+
+	rollback := func(deleted []rrset, added []rrset) {
+		// Re-add records we deleted (best-effort).
+		for _, rec := range deleted {
+			if rec.entry != nil {
+				_, _ = app.repo.CreateDNSRecordSet(project, zone, rec.entry)
+			}
+		}
+		// Remove records we added.
+		for _, rec := range added {
+			_ = app.repo.DeleteDNSRecordSet(project, zone, rec.name, rec.rtype)
 		}
 	}
 
-	body["kind"] = "dns#change"
-	body["id"] = fmt.Sprintf("change-%d", time.Now().UnixNano())
-	body["status"] = "done"
-	body["startTime"] = time.Now().Format(time.RFC3339)
-	writeJSON(w, http.StatusOK, body)
-}
+	completedDeletions := make([]rrset, 0, len(pendingDeletions))
+	for _, rec := range pendingDeletions {
+		if err := app.repo.DeleteDNSRecordSet(project, zone, rec.name, rec.rtype); err != nil {
+			rollback(completedDeletions, nil)
+			writeDomainError(w, err)
+			return
+		}
+		completedDeletions = append(completedDeletions, rec)
+	}
 
-// GetDNSChange returns a stub change record. fakegcp applies changes
-// synchronously inside CreateDNSChange, so any change id the provider
-// polls for is, by definition, already done. Echoing back a done shape
-// is enough for terraform-provider-google's wait loop.
-func (app *Application) GetDNSChange(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "change")
-	writeJSON(w, http.StatusOK, map[string]any{
+	completedAdditions := make([]rrset, 0, len(pendingAdditions))
+	for _, entry := range pendingAdditions {
+		if _, err := app.repo.CreateDNSRecordSet(project, zone, entry); err != nil {
+			rollback(completedDeletions, completedAdditions)
+			writeCreateError(w, err)
+			return
+		}
+		name, _ := entry["name"].(string)
+		rrtype, _ := entry["type"].(string)
+		completedAdditions = append(completedAdditions, rrset{name: name, rtype: rrtype})
+	}
+
+	change := map[string]any{
 		"kind":      "dns#change",
-		"id":        id,
+		"id":        fmt.Sprintf("change-%d", time.Now().UnixNano()),
 		"status":    "done",
 		"startTime": time.Now().Format(time.RFC3339),
-	})
+	}
+	if len(additions) > 0 {
+		change["additions"] = additions
+	}
+	if len(deletions) > 0 {
+		change["deletions"] = deletions
+	}
+	app.recordDNSChange(change)
+	writeJSON(w, http.StatusOK, change)
+}
+
+// GetDNSChange returns the change record CreateDNSChange persisted.
+// fakegcp applies changes synchronously, so the cached record is
+// always status=done. Returning a 404 for an unknown change id (rather
+// than blindly fabricating a done record) catches malformed polling
+// against the test mock the same way Cloud DNS would.
+func (app *Application) GetDNSChange(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "change")
+	if change := app.lookupDNSChange(id); change != nil {
+		writeJSON(w, http.StatusOK, change)
+		return
+	}
+	writeGCPError(w, http.StatusNotFound, fmt.Sprintf("Change %q not found", id), "notFound")
 }
 
 func (app *Application) DeleteDNSRecordSet(w http.ResponseWriter, r *http.Request) {

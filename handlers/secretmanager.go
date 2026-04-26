@@ -172,9 +172,8 @@ func (app *Application) DestroySecretVersion(w http.ResponseWriter, r *http.Requ
 }
 
 // EnableSecretVersion + DisableSecretVersion implement the v1
-// :enable/:disable verbs. We don't model state transitions in detail
-// — we just look the version up to confirm it exists and echo back
-// the current record with the requested state set.
+// :enable/:disable verbs. The transition is persisted so a subsequent
+// GET reflects the new state, matching the real Secret Manager.
 func (app *Application) EnableSecretVersion(w http.ResponseWriter, r *http.Request) {
 	app.setSecretVersionState(w, r, "ENABLED")
 }
@@ -189,11 +188,10 @@ func (app *Application) setSecretVersionState(w http.ResponseWriter, r *http.Req
 	version := chi.URLParam(r, "version")
 
 	name := fmt.Sprintf("projects/%s/secrets/%s/versions/%s", project, secret, version)
-	item, err := app.repo.GetSecretVersion(name)
+	updated, err := app.repo.SetSecretVersionState(name, state)
 	if err != nil {
 		writeDomainError(w, err)
 		return
 	}
-	item["state"] = state
-	writeJSON(w, http.StatusOK, item)
+	writeJSON(w, http.StatusOK, updated)
 }
