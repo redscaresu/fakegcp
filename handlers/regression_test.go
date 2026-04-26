@@ -442,6 +442,50 @@ func TestGetDNSChangeIsScopedByZone(t *testing.T) {
 		"a different zone must not be able to look up zone-a's change id")
 }
 
+// TestPubSubSubscriptionTopicIsImmutable pins the contract that
+// PATCH on a pubsub subscription must not retarget the parent
+// topic. A pre-fix bug let a patched `topic` self-link land in
+// the JSON body while the stored binding still pointed at the
+// original; GET would then report split-brain state.
+func TestPubSubSubscriptionTopicIsImmutable(t *testing.T) {
+	srv, cleanup := testutil.NewTestServer(t)
+	defer cleanup()
+
+	pubsubBase := testutil.IAMPath(project)
+
+	// Two topics: original parent, and a decoy a malicious patch
+	// would try to retarget to.
+	resp, _ := testutil.DoPut(t, srv, pubsubBase+"/topics/orig", map[string]any{})
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	resp, _ = testutil.DoPut(t, srv, pubsubBase+"/topics/decoy", map[string]any{})
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	resp, _ = testutil.DoPut(t, srv, pubsubBase+"/subscriptions/sub", map[string]any{
+		"topic":              "projects/" + project + "/topics/orig",
+		"ackDeadlineSeconds": 30,
+	})
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	// PATCH that tries to flip both ack deadline AND topic. The
+	// ack deadline is mutable (and should land); the topic must
+	// be ignored.
+	resp, _ = testutil.DoPatch(t, srv, pubsubBase+"/subscriptions/sub", map[string]any{
+		"subscription": map[string]any{
+			"topic":              "projects/" + project + "/topics/decoy",
+			"ackDeadlineSeconds": 60,
+		},
+		"updateMask": "ackDeadlineSeconds,topic",
+	})
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	resp, body := testutil.DoGet(t, srv, pubsubBase+"/subscriptions/sub")
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, "projects/"+project+"/topics/orig", body["topic"],
+		"topic must remain bound to the original parent — Pub/Sub doesn't allow retargeting on PATCH")
+	assert.EqualValues(t, 60, body["ackDeadlineSeconds"],
+		"ack deadline (a mutable field) should still take effect")
+}
+
 // TestResetClearsDNSChangeCache pins that /mock/reset wipes the
 // in-memory DNS change history alongside the repo. Without this,
 // a stale change id from before the reset would still resolve and

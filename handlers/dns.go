@@ -100,6 +100,9 @@ func (app *Application) DeleteDNSZone(w http.ResponseWriter, r *http.Request) {
 func (app *Application) CreateDNSRecordSet(w http.ResponseWriter, r *http.Request) {
 	project := chi.URLParam(r, "project")
 	zone := chi.URLParam(r, "zone")
+	if !app.requireDNSZone(w, project, zone) {
+		return
+	}
 
 	body, err := decodeBody(r)
 	if err != nil {
@@ -132,9 +135,24 @@ func (app *Application) CreateDNSRecordSet(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, created)
 }
 
+// requireDNSZone 404s the response and returns false if the parent
+// managed zone doesn't exist in this project. Cloud DNS rejects every
+// rrset/change call against a missing zone with a zone-level 404, not
+// an empty list.
+func (app *Application) requireDNSZone(w http.ResponseWriter, project, zone string) bool {
+	if _, err := app.repo.GetDNSZone(project, zone); err != nil {
+		writeDomainError(w, err)
+		return false
+	}
+	return true
+}
+
 func (app *Application) ListDNSRecordSets(w http.ResponseWriter, r *http.Request) {
 	project := chi.URLParam(r, "project")
 	zone := chi.URLParam(r, "zone")
+	if !app.requireDNSZone(w, project, zone) {
+		return
+	}
 
 	items, err := app.repo.ListDNSRecordSets(project, zone)
 	if err != nil {
@@ -155,6 +173,9 @@ func (app *Application) GetDNSRecordSet(w http.ResponseWriter, r *http.Request) 
 	zone := chi.URLParam(r, "zone")
 	name := chi.URLParam(r, "name")
 	rrtype := chi.URLParam(r, "type")
+	if !app.requireDNSZone(w, project, zone) {
+		return
+	}
 
 	item, err := app.repo.GetDNSRecordSet(project, zone, name, rrtype)
 	if err != nil {
@@ -172,6 +193,9 @@ func (app *Application) GetDNSRecordSet(w http.ResponseWriter, r *http.Request) 
 func (app *Application) CreateDNSChange(w http.ResponseWriter, r *http.Request) {
 	project := chi.URLParam(r, "project")
 	zone := chi.URLParam(r, "zone")
+	if !app.requireDNSZone(w, project, zone) {
+		return
+	}
 
 	body, err := decodeBody(r)
 	if err != nil {
@@ -295,6 +319,9 @@ func (app *Application) GetDNSChange(w http.ResponseWriter, r *http.Request) {
 	project := chi.URLParam(r, "project")
 	zone := chi.URLParam(r, "zone")
 	id := chi.URLParam(r, "change")
+	if !app.requireDNSZone(w, project, zone) {
+		return
+	}
 	if change := app.lookupDNSChange(project, zone, id); change != nil {
 		writeJSON(w, http.StatusOK, change)
 		return
@@ -307,6 +334,9 @@ func (app *Application) DeleteDNSRecordSet(w http.ResponseWriter, r *http.Reques
 	zone := chi.URLParam(r, "zone")
 	name := chi.URLParam(r, "name")
 	rrtype := chi.URLParam(r, "type")
+	if !app.requireDNSZone(w, project, zone) {
+		return
+	}
 
 	if err := app.repo.DeleteDNSRecordSet(project, zone, name, rrtype); err != nil {
 		writeDomainError(w, err)
