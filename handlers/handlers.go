@@ -57,14 +57,17 @@ func (app *Application) lookupDNSChange(project, zone, id string) map[string]any
 	return app.dnsChanges[dnsChangeKey(project, zone, id)]
 }
 
-// resetDNSChanges clears the cached change history. Called from
-// the /mock/reset admin path so a reset wipes both the SQLite
-// repo and the in-memory change cache; otherwise stale change ids
-// from before the reset would still resolve.
+// resetDNSChanges clears the cached change history *and* the
+// snapshot baseline. Called from the /mock/reset admin path so a
+// reset wipes both the SQLite repo and the in-memory change
+// caches; the repo's Reset() drops its .snapshot file too, so
+// keeping the snapshot here would leave a stale baseline that
+// could re-emerge on a later /mock/restore.
 func (app *Application) resetDNSChanges() {
 	app.dnsChangesMu.Lock()
 	defer app.dnsChangesMu.Unlock()
 	app.dnsChanges = map[string]map[string]any{}
+	app.dnsChangesSnapshot = nil
 }
 
 // snapshotDNSChanges captures the current cache so a later

@@ -2389,12 +2389,18 @@ func (r *Repository) DeleteSecretVersion(name string) error {
 }
 
 // SetSecretVersionState transitions a version's `state` field
-// (ENABLED, DISABLED, DESTROYED) and persists the change so a
-// subsequent GetSecretVersion sees the new value.
+// (ENABLED, DISABLED) and persists the change so a subsequent
+// GetSecretVersion sees the new value. DESTROYED is terminal in
+// Secret Manager — a destroyed version cannot be re-enabled or
+// re-disabled, so the call is rejected with ErrConflict to match
+// the real API rather than silently resurrecting it.
 func (r *Repository) SetSecretVersionState(name, state string) (map[string]any, error) {
 	current, err := r.GetSecretVersion(name)
 	if err != nil {
 		return nil, err
+	}
+	if getString(current, "state") == "DESTROYED" {
+		return nil, models.ErrConflict
 	}
 	current["state"] = state
 	raw, err := marshalData(current)

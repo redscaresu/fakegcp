@@ -343,6 +343,38 @@ func TestSecretVersionDestroyPreservesRow(t *testing.T) {
 	assert.False(t, hasPayload, "destroyed version must not retain its payload")
 }
 
+// TestEnableDisableRejectDestroyedVersion pins the terminal-state
+// contract: once a Secret Manager version is destroyed, neither
+// :enable nor :disable can resurrect it. The real API returns
+// 409; we surface that via the repo's ErrConflict mapping.
+func TestEnableDisableRejectDestroyedVersion(t *testing.T) {
+	srv, cleanup := testutil.NewTestServer(t)
+	defer cleanup()
+
+	mustCreate(t, srv, testutil.IAMPath(project, "secrets"), map[string]any{
+		"secretId":    "terminal",
+		"replication": map[string]any{"automatic": map[string]any{}},
+	})
+	mustCreate(t, srv, testutil.IAMPath(project, "secrets", "terminal:addVersion"), map[string]any{
+		"payload": map[string]any{"data": "aGVsbG8="},
+	})
+
+	resp, _ := testutil.DoCreate(t, srv, testutil.IAMPath(project, "secrets", "terminal", "versions", "1:destroy"), map[string]any{})
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	resp, _ = testutil.DoCreate(t, srv, testutil.IAMPath(project, "secrets", "terminal", "versions", "1:enable"), map[string]any{})
+	assert.Equal(t, http.StatusConflict, resp.StatusCode,
+		"DESTROYED is terminal — :enable must not resurrect the version")
+
+	resp, _ = testutil.DoCreate(t, srv, testutil.IAMPath(project, "secrets", "terminal", "versions", "1:disable"), map[string]any{})
+	assert.Equal(t, http.StatusConflict, resp.StatusCode,
+		"DESTROYED is terminal — :disable must not silently rewrite state")
+
+	resp, body := testutil.DoGet(t, srv, testutil.IAMPath(project, "secrets", "terminal", "versions", "1"))
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, "DESTROYED", body["state"], "version must remain DESTROYED after rejected resurrects")
+}
+
 // TestGetDNSChangeIsScopedByZone pins the (project, zone, id)
 // keying for cached DNS changes. A poll against managed-zone B
 // against a change created in zone A must 404, not silently
