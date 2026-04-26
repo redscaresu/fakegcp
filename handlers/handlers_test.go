@@ -803,6 +803,11 @@ func TestDNSRecordSetFKViolation(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
 
+// TestDNSZoneDeleteWithRecords pins the Cloud DNS contract:
+// deleting a managed zone with rrsets in it must fail with 409
+// (real Cloud DNS returns 400 containerNotEmpty; fakegcp surfaces
+// it as 409 in-use). The caller has to delete rrsets first via
+// the changes API, then delete the zone.
 func TestDNSZoneDeleteWithRecords(t *testing.T) {
 	srv, cleanup := testutil.NewTestServer(t)
 	defer cleanup()
@@ -819,12 +824,21 @@ func TestDNSZoneDeleteWithRecords(t *testing.T) {
 		"rrdatas": []string{"1.2.3.4"},
 	})
 
+	// Non-empty zone delete must be refused with 409 in-use.
+	resp, _ := testutil.DoDelete(t, srv, zonesPath+"/test-zone")
+	require.Equal(t, http.StatusConflict, resp.StatusCode,
+		"deleting a non-empty managed zone must fail; the rrset must still exist afterwards")
+
+	resp, _ = testutil.DoGet(t, srv, zonesPath+"/test-zone/rrsets/www.example.com./A")
+	assert.Equal(t, http.StatusOK, resp.StatusCode,
+		"the rrset must survive the refused zone delete")
+
+	// Removing the rrset clears the FK and the zone delete now succeeds.
+	resp, _ = testutil.DoDelete(t, srv, zonesPath+"/test-zone/rrsets/www.example.com./A")
+	require.Equal(t, http.StatusOK, resp.StatusCode)
 	resp, body := testutil.DoDelete(t, srv, zonesPath+"/test-zone")
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	require.NotNil(t, body)
-
-	resp, _ = testutil.DoGet(t, srv, zonesPath+"/test-zone/rrsets/www.example.com./A")
-	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
 
 func TestGlobalAddressCRUD(t *testing.T) {

@@ -1926,6 +1926,19 @@ func (r *Repository) UpdateDNSZone(project, name string, patch map[string]any) (
 }
 
 func (r *Repository) DeleteDNSZone(project, name string) error {
+	// Cloud DNS only allows deleting an empty managed zone — the
+	// real API returns 400 containerNotEmpty otherwise. The
+	// dns_record_sets FK has ON DELETE CASCADE for convenience
+	// in handler-level tests, but at the API surface we want the
+	// same "must be empty" contract real Cloud DNS enforces, so
+	// we count rrsets first and refuse the delete if any exist.
+	var count int
+	if err := r.db.QueryRow(`SELECT COUNT(*) FROM dns_record_sets WHERE project = ? AND managed_zone = ?`, project, name).Scan(&count); err != nil {
+		return err
+	}
+	if count > 0 {
+		return models.ErrInUse
+	}
 	return r.deleteWithResult(`DELETE FROM dns_managed_zones WHERE project = ? AND name = ?`, project, name)
 }
 
@@ -2513,10 +2526,19 @@ func (r *Repository) UpdateSubscription(project, name string, patch map[string]a
 	if err != nil {
 		return nil, err
 	}
-	merged := patchMerge(current, patch, "name", "project", "topic_name")
+	// Pub/Sub treats the parent topic as immutable on Patch. The
+	// patchMerge skip-list keeps `topic_name` from being written
+	// from the patch, but the patch may carry a different `topic`
+	// self-link too — overwriting the merged body's `topic` with
+	// the original prevents split-brain state where GET reports a
+	// new topic while topic_name still binds the row to the old.
+	merged := patchMerge(current, patch, "name", "project", "topic_name", "topic")
 	merged["project"] = project
 	if currentName := extractNameFromSelfLink(getString(current, "name")); currentName != "" {
 		merged["name"] = fmt.Sprintf("projects/%s/subscriptions/%s", project, currentName)
+	}
+	if currentTopic := getString(current, "topic"); currentTopic != "" {
+		merged["topic"] = currentTopic
 	}
 	topicName := getString(current, "topic_name")
 	if topicName == "" {
