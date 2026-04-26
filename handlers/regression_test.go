@@ -213,6 +213,60 @@ func TestLBChainUpdateFKValidation(t *testing.T) {
 		})
 		assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 	})
+
+	t.Run("forwardingRule create rejects nonexistent IPAddress bare name", func(t *testing.T) {
+		resp, _ := testutil.DoCreate(t, srv, testutil.ComputePath(project, "global", "forwardingRules"), map[string]any{
+			"name":      "fr-bad-bare-ip",
+			"target":    "good-thp",
+			"IPAddress": "missing-addr",
+			"portRange": "443",
+		})
+		assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+	})
+
+	t.Run("forwardingRule create rejects malformed IPAddress", func(t *testing.T) {
+		// Neither a parseable IP nor a recognisable resource path.
+		resp, _ := testutil.DoCreate(t, srv, testutil.ComputePath(project, "global", "forwardingRules"), map[string]any{
+			"name":      "fr-malformed-ip",
+			"target":    "good-thp",
+			"IPAddress": "not.a.valid.ref/with/extra/segments",
+			"portRange": "443",
+		})
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	})
+
+	t.Run("forwardingRule create rejects cross-project IPAddress self-link", func(t *testing.T) {
+		resp, _ := testutil.DoCreate(t, srv, testutil.ComputePath(project, "global", "forwardingRules"), map[string]any{
+			"name":      "fr-xproject-ip",
+			"target":    "good-thp",
+			"IPAddress": "projects/other/global/addresses/lb-ip",
+			"portRange": "443",
+		})
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	})
+
+	t.Run("forwardingRule create accepts literal IP in IPAddress", func(t *testing.T) {
+		resp, _ := testutil.DoCreate(t, srv, testutil.ComputePath(project, "global", "forwardingRules"), map[string]any{
+			"name":      "fr-literal-ip",
+			"target":    "good-thp",
+			"IPAddress": "203.0.113.42",
+			"portRange": "443",
+		})
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+	})
+
+	t.Run("forwardingRule create accepts existing reserved IPAddress bare name", func(t *testing.T) {
+		mustCreate(t, srv, testutil.ComputePath(project, "global", "addresses"), map[string]any{
+			"name": "lb-reserved-ip",
+		})
+		resp, _ := testutil.DoCreate(t, srv, testutil.ComputePath(project, "global", "forwardingRules"), map[string]any{
+			"name":      "fr-reserved-ip",
+			"target":    "good-thp",
+			"IPAddress": "lb-reserved-ip",
+			"portRange": "443",
+		})
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+	})
 }
 
 // mustCreate wraps DoCreate with a require on a 200, so test setup

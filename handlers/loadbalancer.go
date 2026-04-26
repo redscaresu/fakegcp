@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -43,21 +44,24 @@ func (app *Application) validateScalarFK(w http.ResponseWriter, body map[string]
 }
 
 // validateForwardingRuleIPAddress validates the global forwarding
-// rule's IPAddress when it's set to a self-link of a reserved global
-// address. A literal IPv4/IPv6 string passes through unchanged — the
-// real Compute API accepts both forms.
+// rule's IPAddress field. The Compute API accepts three shapes:
+//   - a literal IPv4/IPv6 string ("34.1.2.3", "2600:1900::1") — let through.
+//   - a bare resource name ("lb-ip") — look up against globalAddresses.
+//   - a self-link or relative path — same FK lookup, with shape validation.
+// Anything else (a string that's neither a parseable IP nor a valid
+// path nor a known address name) is rejected as malformed.
 func (app *Application) validateForwardingRuleIPAddress(w http.ResponseWriter, body map[string]any, project string) bool {
 	ref, _ := body["IPAddress"].(string)
 	if ref == "" {
 		return true
 	}
-	// Heuristic: if the reference contains "/" it's a path of some
-	// kind — a self-link or a relative resource path. Otherwise
-	// treat it as a literal IP and let it through (Compute accepts
-	// it).
-	if !strings.Contains(ref, "/") {
+	// Literal IP: pass through unchanged.
+	if net.ParseIP(ref) != nil {
 		return true
 	}
+	// Otherwise the value must resolve as a global-address reference.
+	// computeRefName accepts bare names AND self-link/relative paths;
+	// anything that doesn't look like either is rejected.
 	name, ok := computeRefName(ref, project, "addresses")
 	if !ok {
 		writeGCPError(w, http.StatusBadRequest,
