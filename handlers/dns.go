@@ -118,6 +118,12 @@ func (app *Application) CreateDNSRecordSet(w http.ResponseWriter, r *http.Reques
 	}
 
 	body["kind"] = "dns#resourceRecordSet"
+	// Stamp a creation timestamp so identity checks can detect a
+	// same-name delete-and-recreate even though Cloud DNS itself
+	// doesn't expose a creationTime on rrsets.
+	if _, ok := body["creationTime"]; !ok {
+		body["creationTime"] = time.Now().Format(time.RFC3339Nano)
+	}
 
 	created, err := app.repo.CreateDNSRecordSet(project, zone, body)
 	if err != nil {
@@ -219,6 +225,9 @@ func (app *Application) CreateDNSChange(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		entry["kind"] = "dns#resourceRecordSet"
+		if _, ok := entry["creationTime"]; !ok {
+			entry["creationTime"] = time.Now().Format(time.RFC3339Nano)
+		}
 		pendingAdditions = append(pendingAdditions, entry)
 	}
 

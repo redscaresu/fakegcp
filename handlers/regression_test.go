@@ -115,6 +115,79 @@ func TestGetDNSChange404ForUnknownID(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
 
+// TestDNSChangeRollbackOrder pins the rollback order for the
+// (delete A, add replacement A, fail mid-additions) interleaving.
+// Earlier code rolled back deletions before additions, so the
+// re-create of A collided with the freshly-added A and silently
+// no-op'd; the subsequent addition-cleanup deleted A, leaving
+// neither rrset present. The fix undoes additions FIRST, then
+// re-creates the deletions. Without that ordering this test
+// regresses to "the original A is gone after rollback".
+func TestDNSChangeRollbackOrder(t *testing.T) {
+	srv, cleanup := testutil.NewTestServer(t)
+	defer cleanup()
+
+	dnsZonePath := "/dns/v1/projects/" + project + "/managedZones"
+	_, _ = testutil.DoCreate(t, srv, dnsZonePath, map[string]any{
+		"name":       "rollback-zone",
+		"dnsName":    "rollback.invalid.",
+		"visibility": "public",
+	})
+
+	// Seed: existing rrset A pointing at 192.0.2.10.
+	originalRR := map[string]any{
+		"name":    "host.rollback.invalid.",
+		"type":    "A",
+		"ttl":     300,
+		"rrdatas": []any{"192.0.2.10"},
+	}
+	_, _ = testutil.DoCreate(t, srv, dnsZonePath+"/rollback-zone/changes", map[string]any{
+		"additions": []any{originalRR},
+	})
+
+	// Now submit a change that:
+	//   - deletes the existing A, AND
+	//   - adds replacement A pointing at 192.0.2.20, AND
+	//   - tries to add a malformed rrset with no `type`, which forces
+	//     a partial-failure mid-additions and triggers rollback.
+	resp, _ := testutil.DoCreate(t, srv, dnsZonePath+"/rollback-zone/changes", map[string]any{
+		"deletions": []any{originalRR},
+		"additions": []any{
+			map[string]any{
+				"name":    "host.rollback.invalid.",
+				"type":    "A",
+				"ttl":     300,
+				"rrdatas": []any{"192.0.2.20"},
+			},
+			// missing `type` → CreateDNSChange validates additions up
+			// front and rejects with 400 before any state change.
+			// To force a mid-additions failure we need an addition
+			// that the up-front validator accepts but the repository
+			// rejects. A duplicate of the replacement we already
+			// added does that — fakegcp's rrset table has a unique
+			// (project, zone, name, type) constraint.
+			map[string]any{
+				"name":    "host.rollback.invalid.",
+				"type":    "A",
+				"ttl":     300,
+				"rrdatas": []any{"192.0.2.30"},
+			},
+		},
+	})
+	if resp.StatusCode == http.StatusOK {
+		t.Fatalf("expected change to fail mid-additions, got 200")
+	}
+
+	// After rollback, the original rrset must still resolve.
+	resp, body := testutil.DoGet(t, srv, dnsZonePath+"/rollback-zone/rrsets/host.rollback.invalid./A")
+	require.Equal(t, http.StatusOK, resp.StatusCode,
+		"after rollback the original rrset must still exist")
+	rrdatas, _ := body["rrdatas"].([]any)
+	require.Equal(t, 1, len(rrdatas), "expected exactly the original rrdatas")
+	assert.Equal(t, "192.0.2.10", rrdatas[0],
+		"rollback re-created the original rrdata; replacement value would mean wrong rollback order")
+}
+
 // TestBackendServiceFKValidatesHealthCheckShape guards the new
 // path-shape FK: a self-link pointing at a different project or a
 // different collection must be rejected even when a same-named
@@ -157,6 +230,26 @@ func TestBackendServiceFKValidatesHealthCheckShape(t *testing.T) {
 			name:       "same-project self-link accepted",
 			ref:        "projects/" + project + "/global/healthChecks/test-hc",
 			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "compute/v1 prefixed same-project self-link accepted",
+			ref:        "compute/v1/projects/" + project + "/global/healthChecks/test-hc",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "absolute URL same-project self-link accepted",
+			ref:        "https://www.googleapis.com/compute/v1/projects/" + project + "/global/healthChecks/test-hc",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "absolute URL cross-project self-link rejected",
+			ref:        "https://www.googleapis.com/compute/v1/projects/other-project/global/healthChecks/test-hc",
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "absolute URL wrong-collection self-link rejected",
+			ref:        "https://www.googleapis.com/compute/v1/projects/" + project + "/global/backendServices/test-hc",
+			wantStatus: http.StatusBadRequest,
 		},
 	}
 	for i, tc := range cases {
