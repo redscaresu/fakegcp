@@ -1,0 +1,5 @@
+[allowlist]
+description = "examples/ contains placeholder Terraform fixtures only"
+paths = [
+  "examples/.*\\.tf$",
+]
