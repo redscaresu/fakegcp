@@ -3,11 +3,22 @@ package handlers
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/redscaresu/fakegcp/models"
 )
+
+// lastPathSegment returns the trailing segment of a slash-separated
+// self-link or resource-name URL. Used to peel a bare resource name
+// off a fully-qualified Compute self-link before FK lookups.
+func lastPathSegment(s string) string {
+	if i := strings.LastIndex(s, "/"); i >= 0 {
+		return s[i+1:]
+	}
+	return s
+}
 
 func globalResourceLink(r *http.Request, project, collection, name string) string {
 	return selfLink(r, "compute", "v1", "projects", project, "global", collection, name)
@@ -194,6 +205,24 @@ func (app *Application) CreateBackendService(w http.ResponseWriter, r *http.Requ
 	}
 	if _, ok := body["loadBalancingScheme"]; !ok {
 		body["loadBalancingScheme"] = "EXTERNAL"
+	}
+	// Validate every referenced health check exists. Real Compute API
+	// rejects backend-service create with a 404 if any healthChecks
+	// entry doesn't resolve — without this FK check, a typo'd self-link
+	// or a deleted health check creates a backend service that points
+	// at nothing.
+	if hcs, ok := body["healthChecks"].([]any); ok {
+		for _, hc := range hcs {
+			selfLink, _ := hc.(string)
+			if selfLink == "" {
+				continue
+			}
+			hcName := lastPathSegment(selfLink)
+			if _, err := app.repo.GetHealthCheck(project, hcName); err != nil {
+				writeDomainError(w, err)
+				return
+			}
+		}
 	}
 	created, err := app.repo.CreateBackendService(project, body)
 	if err != nil {
