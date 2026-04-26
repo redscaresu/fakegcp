@@ -20,6 +20,80 @@ func lastPathSegment(s string) string {
 	return s
 }
 
+// fkScalar validates `body[field]` (string) against `getter`. Returns
+// (continue, error). The error is the GCP-shaped HTTP response that
+// has already been written; the caller just returns. nil/missing
+// fields are treated as a no-op (nothing to validate).
+func (app *Application) validateScalarFK(w http.ResponseWriter, body map[string]any, field, project, collection string, getter func(string, string) (map[string]any, error)) bool {
+	ref, ok := body[field].(string)
+	if !ok || ref == "" {
+		return true
+	}
+	target, ok := computeRefName(ref, project, collection)
+	if !ok {
+		writeGCPError(w, http.StatusBadRequest,
+			fmt.Sprintf("Invalid %s reference %q", field, ref), "invalid")
+		return false
+	}
+	if _, err := getter(project, target); err != nil {
+		writeDomainError(w, err)
+		return false
+	}
+	return true
+}
+
+// validateForwardingRuleTarget validates the global forwarding rule's
+// `target`. Unlike most LB FKs, the target can point at one of
+// several collections (targetHttpProxies, targetHttpsProxies — in
+// principle others, but those are what fakegcp models today). We
+// inspect the reference, dispatch to the matching getter, and
+// reject anything that doesn't fit the supported set.
+func (app *Application) validateForwardingRuleTarget(w http.ResponseWriter, body map[string]any, project string) bool {
+	ref, _ := body["target"].(string)
+	if ref == "" {
+		return true
+	}
+	if name, ok := computeRefName(ref, project, "targetHttpsProxies"); ok {
+		if _, err := app.repo.GetTargetHTTPSProxy(project, name); err != nil {
+			writeDomainError(w, err)
+			return false
+		}
+		return true
+	}
+	// Only targetHttpsProxies are modeled today. Any other reference
+	// — different project, different (or unsupported) collection — is
+	// rejected with a 400 instead of falling through to a successful
+	// create that points at nothing.
+	writeGCPError(w, http.StatusBadRequest,
+		fmt.Sprintf("Invalid target reference %q (only same-project targetHttpsProxies are supported)", ref),
+		"invalid")
+	return false
+}
+
+func (app *Application) validateListFK(w http.ResponseWriter, body map[string]any, field, project, collection string, getter func(string, string) (map[string]any, error)) bool {
+	refs, ok := body[field].([]any)
+	if !ok {
+		return true
+	}
+	for _, raw := range refs {
+		ref, _ := raw.(string)
+		if ref == "" {
+			continue
+		}
+		target, ok := computeRefName(ref, project, collection)
+		if !ok {
+			writeGCPError(w, http.StatusBadRequest,
+				fmt.Sprintf("Invalid %s reference %q", field, ref), "invalid")
+			return false
+		}
+		if _, err := getter(project, target); err != nil {
+			writeDomainError(w, err)
+			return false
+		}
+	}
+	return true
+}
+
 // computeRefName extracts the leaf resource name from a compute
 // self-link or relative path like
 // `projects/<project>/global/<collection>/<name>` (with optional
@@ -247,31 +321,13 @@ func (app *Application) CreateBackendService(w http.ResponseWriter, r *http.Requ
 	if _, ok := body["loadBalancingScheme"]; !ok {
 		body["loadBalancingScheme"] = "EXTERNAL"
 	}
-	// Validate every referenced health check exists. Real Compute API
-	// rejects backend-service create with a 404 if any healthChecks
-	// entry doesn't resolve — without this FK check, a typo'd self-link
-	// or a deleted health check creates a backend service that points
-	// at nothing. We require the reference to either be a bare name or
-	// a self-link in the same project + healthChecks collection; a
-	// reference pointing at a different project or collection is
-	// rejected even if a same-named local health check happens to exist.
-	if hcs, ok := body["healthChecks"].([]any); ok {
-		for _, hc := range hcs {
-			ref, _ := hc.(string)
-			if ref == "" {
-				continue
-			}
-			hcName, ok := computeRefName(ref, project, "healthChecks")
-			if !ok {
-				writeGCPError(w, http.StatusBadRequest,
-					fmt.Sprintf("Invalid health-check reference %q", ref), "invalid")
-				return
-			}
-			if _, err := app.repo.GetHealthCheck(project, hcName); err != nil {
-				writeDomainError(w, err)
-				return
-			}
-		}
+	// Real Compute rejects a backend-service create or update if any
+	// `healthChecks` entry doesn't resolve to a same-project health
+	// check. Apply the same FK to both Create and Update so a PATCH
+	// can't introduce a dangling reference that the Create gate would
+	// have caught.
+	if !app.validateListFK(w, body, "healthChecks", project, "healthChecks", app.repo.GetHealthCheck) {
+		return
 	}
 	created, err := app.repo.CreateBackendService(project, body)
 	if err != nil {
@@ -314,6 +370,9 @@ func (app *Application) UpdateBackendService(w http.ResponseWriter, r *http.Requ
 	patch, err := decodeBody(r)
 	if err != nil {
 		writeGCPError(w, http.StatusBadRequest, "Invalid JSON body", "invalid")
+		return
+	}
+	if !app.validateListFK(w, patch, "healthChecks", project, "healthChecks", app.repo.GetHealthCheck) {
 		return
 	}
 	updated, err := app.repo.UpdateBackendService(project, name, patch)
@@ -419,6 +478,12 @@ func (app *Application) CreateTargetHTTPSProxy(w http.ResponseWriter, r *http.Re
 	body["kind"] = "compute#targetHttpsProxy"
 	body["selfLink"] = globalResourceLink(r, project, "targetHttpsProxies", name)
 	body["creationTimestamp"] = time.Now().Format(time.RFC3339)
+	if !app.validateScalarFK(w, body, "urlMap", project, "urlMaps", app.repo.GetURLMap) {
+		return
+	}
+	if !app.validateListFK(w, body, "sslCertificates", project, "sslCertificates", app.repo.GetSSLCertificate) {
+		return
+	}
 	created, err := app.repo.CreateTargetHTTPSProxy(project, body)
 	if err != nil {
 		writeCreateError(w, err)
@@ -462,6 +527,12 @@ func (app *Application) UpdateTargetHTTPSProxy(w http.ResponseWriter, r *http.Re
 		writeGCPError(w, http.StatusBadRequest, "Invalid JSON body", "invalid")
 		return
 	}
+	if !app.validateScalarFK(w, patch, "urlMap", project, "urlMaps", app.repo.GetURLMap) {
+		return
+	}
+	if !app.validateListFK(w, patch, "sslCertificates", project, "sslCertificates", app.repo.GetSSLCertificate) {
+		return
+	}
 	updated, err := app.repo.UpdateTargetHTTPSProxy(project, name, patch)
 	if err != nil {
 		writeDomainError(w, err)
@@ -500,6 +571,9 @@ func (app *Application) CreateURLMap(w http.ResponseWriter, r *http.Request) {
 	body["kind"] = "compute#urlMap"
 	body["selfLink"] = globalResourceLink(r, project, "urlMaps", name)
 	body["creationTimestamp"] = time.Now().Format(time.RFC3339)
+	if !app.validateScalarFK(w, body, "defaultService", project, "backendServices", app.repo.GetBackendService) {
+		return
+	}
 	created, err := app.repo.CreateURLMap(project, body)
 	if err != nil {
 		writeCreateError(w, err)
@@ -541,6 +615,9 @@ func (app *Application) UpdateURLMap(w http.ResponseWriter, r *http.Request) {
 	patch, err := decodeBody(r)
 	if err != nil {
 		writeGCPError(w, http.StatusBadRequest, "Invalid JSON body", "invalid")
+		return
+	}
+	if !app.validateScalarFK(w, patch, "defaultService", project, "backendServices", app.repo.GetBackendService) {
 		return
 	}
 	updated, err := app.repo.UpdateURLMap(project, name, patch)
@@ -586,6 +663,14 @@ func (app *Application) CreateGlobalForwardingRule(w http.ResponseWriter, r *htt
 	}
 	if _, ok := body["loadBalancingScheme"]; !ok {
 		body["loadBalancingScheme"] = "EXTERNAL"
+	}
+	// `target` may be any of several proxy collections (targetHttpProxies,
+	// targetHttpsProxies, targetTcpProxies, ...). Resolve and validate
+	// against whichever collection the reference declares; rejecting
+	// the request when the collection isn't a known target type, or
+	// when the target itself doesn't exist in this project.
+	if !app.validateForwardingRuleTarget(w, body, project) {
+		return
 	}
 	created, err := app.repo.CreateGlobalForwardingRule(project, body)
 	if err != nil {

@@ -130,6 +130,31 @@ func TestListGlobalForwardingRulesReturnsCreatedRule(t *testing.T) {
 	srv, cleanup := testutil.NewTestServer(t)
 	defer cleanup()
 
+	// Set up the LB chain that forwardingRules.target now requires.
+	_, _ = testutil.DoCreate(t, srv, testutil.ComputePath(project, "global", "healthChecks"), map[string]any{
+		"name": "test-hc",
+		"httpHealthCheck": map[string]any{"port": 80, "requestPath": "/"},
+	})
+	_, _ = testutil.DoCreate(t, srv, testutil.ComputePath(project, "global", "backendServices"), map[string]any{
+		"name":         "test-bs",
+		"protocol":     "HTTP",
+		"healthChecks": []any{"test-hc"},
+	})
+	_, _ = testutil.DoCreate(t, srv, testutil.ComputePath(project, "global", "urlMaps"), map[string]any{
+		"name":           "test-urlmap",
+		"defaultService": "test-bs",
+	})
+	_, _ = testutil.DoCreate(t, srv, testutil.ComputePath(project, "global", "sslCertificates"), map[string]any{
+		"name":        "test-cert",
+		"privateKey":  "fake",
+		"certificate": "fake",
+	})
+	_, _ = testutil.DoCreate(t, srv, testutil.ComputePath(project, "global", "targetHttpsProxies"), map[string]any{
+		"name":            "test-proxy",
+		"urlMap":          "test-urlmap",
+		"sslCertificates": []any{"test-cert"},
+	})
+
 	createPath := testutil.ComputePath(project, "global", "forwardingRules")
 	createResp, createBody := testutil.DoCreate(t, srv, createPath, map[string]any{
 		"name":      "list-test-fwd",

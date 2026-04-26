@@ -907,6 +907,19 @@ func TestURLMapCRUD(t *testing.T) {
 	srv, cleanup := testutil.NewTestServer(t)
 	defer cleanup()
 
+	// urlMap.defaultService is now FK-validated against backendServices,
+	// so we have to set up the dependency first. The same chain holds in
+	// production: a URL map cannot reference a non-existent backend.
+	_, _ = testutil.DoCreate(t, srv, testutil.ComputePath(project, "global", "healthChecks"), map[string]any{
+		"name": "test-hc",
+		"httpHealthCheck": map[string]any{"port": 80, "requestPath": "/"},
+	})
+	_, _ = testutil.DoCreate(t, srv, testutil.ComputePath(project, "global", "backendServices"), map[string]any{
+		"name":         "test-bs",
+		"protocol":     "HTTP",
+		"healthChecks": []any{"test-hc"},
+	})
+
 	resp, body := testutil.DoCreate(t, srv, testutil.ComputePath(project, "global", "urlMaps"), map[string]any{
 		"name":           "test-urlmap",
 		"defaultService": "https://example.invalid/compute/v1/projects/test-project/global/backendServices/test-bs",
@@ -928,6 +941,27 @@ func TestTargetHTTPSProxyCRUD(t *testing.T) {
 	srv, cleanup := testutil.NewTestServer(t)
 	defer cleanup()
 
+	// targetHttpsProxies references urlMap + sslCertificates, both
+	// FK-validated. Set up the prerequisites first.
+	_, _ = testutil.DoCreate(t, srv, testutil.ComputePath(project, "global", "healthChecks"), map[string]any{
+		"name": "test-hc",
+		"httpHealthCheck": map[string]any{"port": 80, "requestPath": "/"},
+	})
+	_, _ = testutil.DoCreate(t, srv, testutil.ComputePath(project, "global", "backendServices"), map[string]any{
+		"name":         "test-bs",
+		"protocol":     "HTTP",
+		"healthChecks": []any{"test-hc"},
+	})
+	_, _ = testutil.DoCreate(t, srv, testutil.ComputePath(project, "global", "urlMaps"), map[string]any{
+		"name":           "test-urlmap",
+		"defaultService": "test-bs",
+	})
+	_, _ = testutil.DoCreate(t, srv, testutil.ComputePath(project, "global", "sslCertificates"), map[string]any{
+		"name":        "test-cert",
+		"privateKey":  "fake",
+		"certificate": "fake",
+	})
+
 	resp, body := testutil.DoCreate(t, srv, testutil.ComputePath(project, "global", "targetHttpsProxies"), map[string]any{
 		"name":            "test-proxy",
 		"urlMap":          "https://example.invalid/compute/v1/projects/test-project/global/urlMaps/test-urlmap",
@@ -946,6 +980,33 @@ func TestTargetHTTPSProxyCRUD(t *testing.T) {
 func TestGlobalForwardingRuleCRUD(t *testing.T) {
 	srv, cleanup := testutil.NewTestServer(t)
 	defer cleanup()
+
+	// forwardingRules.target is FK-validated against the matching
+	// proxy collection (targetHttpsProxies in this case). Set up the
+	// full chain first.
+	_, _ = testutil.DoCreate(t, srv, testutil.ComputePath(project, "global", "healthChecks"), map[string]any{
+		"name": "test-hc",
+		"httpHealthCheck": map[string]any{"port": 80, "requestPath": "/"},
+	})
+	_, _ = testutil.DoCreate(t, srv, testutil.ComputePath(project, "global", "backendServices"), map[string]any{
+		"name":         "test-bs",
+		"protocol":     "HTTP",
+		"healthChecks": []any{"test-hc"},
+	})
+	_, _ = testutil.DoCreate(t, srv, testutil.ComputePath(project, "global", "urlMaps"), map[string]any{
+		"name":           "test-urlmap",
+		"defaultService": "test-bs",
+	})
+	_, _ = testutil.DoCreate(t, srv, testutil.ComputePath(project, "global", "sslCertificates"), map[string]any{
+		"name":        "test-cert",
+		"privateKey":  "fake",
+		"certificate": "fake",
+	})
+	_, _ = testutil.DoCreate(t, srv, testutil.ComputePath(project, "global", "targetHttpsProxies"), map[string]any{
+		"name":            "test-proxy",
+		"urlMap":          "test-urlmap",
+		"sslCertificates": []any{"test-cert"},
+	})
 
 	resp, body := testutil.DoCreate(t, srv, testutil.ComputePath(project, "global", "forwardingRules"), map[string]any{
 		"name":       "test-fwd",
