@@ -705,10 +705,11 @@ func (app *Application) CreateGlobalForwardingRule(w http.ResponseWriter, r *htt
 	if !app.validateForwardingRuleTarget(w, body, project) {
 		return
 	}
-	// IPAddress may be a literal IP (string) or a self-link to a
-	// reserved global address. computeRefName returns a non-IP-shaped
-	// string only for actual self-links; literal IPs go straight
-	// through (Cloud Compute treats both as valid).
+	// IPAddress may be a literal IP (string), a bare reserved-address
+	// name, a same-project relative path, or an absolute self-link.
+	// validateForwardingRuleIPAddress short-circuits parseable IPs and
+	// otherwise FK-resolves the reference against globalAddresses;
+	// malformed values are rejected.
 	if !app.validateForwardingRuleIPAddress(w, body, project) {
 		return
 	}
