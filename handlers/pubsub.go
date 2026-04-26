@@ -112,10 +112,17 @@ func (app *Application) UpdateSubscription(w http.ResponseWriter, r *http.Reques
 	project := chi.URLParam(r, "project")
 	subscription := chi.URLParam(r, "subscription")
 
-	patch, err := decodeBody(r)
+	body, err := decodeBody(r)
 	if err != nil {
 		writeGCPError(w, http.StatusBadRequest, "Invalid JSON body", "invalid")
 		return
+	}
+	// PubSub v1 Patch wraps the resource in a `subscription` field
+	// alongside an `updateMask`. Tools that hit the API directly may
+	// instead post a flat patch body — accept either shape.
+	patch := body
+	if nested, ok := body["subscription"].(map[string]any); ok {
+		patch = nested
 	}
 	updated, err := app.repo.UpdateSubscription(project, subscription, patch)
 	if err != nil {

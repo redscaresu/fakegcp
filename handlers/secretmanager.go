@@ -73,6 +73,23 @@ func (app *Application) DeleteSecret(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{})
 }
 
+func (app *Application) UpdateSecret(w http.ResponseWriter, r *http.Request) {
+	project := chi.URLParam(r, "project")
+	secret := chi.URLParam(r, "secret")
+
+	patch, err := decodeBody(r)
+	if err != nil {
+		writeGCPError(w, http.StatusBadRequest, "Invalid JSON body", "invalid")
+		return
+	}
+	updated, err := app.repo.UpdateSecret(project, secret, patch)
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
+}
+
 func (app *Application) CreateSecretVersion(w http.ResponseWriter, r *http.Request) {
 	project := chi.URLParam(r, "project")
 	secret := chi.URLParam(r, "secret")

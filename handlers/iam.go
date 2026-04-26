@@ -90,6 +90,31 @@ func (app *Application) DeleteServiceAccount(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusOK, map[string]any{})
 }
 
+// UpdateServiceAccount handles the v1 PATCH that the Terraform provider
+// uses when display_name (or any other mutable field) drifts. The body
+// shape mirrors Create — {serviceAccount: {...}, updateMask: "..."} —
+// so we unwrap `serviceAccount` if present.
+func (app *Application) UpdateServiceAccount(w http.ResponseWriter, r *http.Request) {
+	project := chi.URLParam(r, "project")
+	email := chi.URLParam(r, "email")
+
+	body, err := decodeBody(r)
+	if err != nil {
+		writeGCPError(w, http.StatusBadRequest, "Invalid JSON body", "invalid")
+		return
+	}
+	patch := body
+	if nested, ok := body["serviceAccount"].(map[string]any); ok {
+		patch = nested
+	}
+	updated, err := app.repo.UpdateServiceAccount(project, email, patch)
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
+}
+
 func (app *Application) CreateSAKey(w http.ResponseWriter, r *http.Request) {
 	project := chi.URLParam(r, "project")
 	email := chi.URLParam(r, "email")

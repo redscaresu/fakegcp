@@ -1099,6 +1099,27 @@ func (r *Repository) DeleteServiceAccount(project, email string) error {
 	return r.deleteWithResult(`DELETE FROM iam_service_accounts WHERE project = ? AND email = ?`, project, email)
 }
 
+func (r *Repository) UpdateServiceAccount(project, email string, patch map[string]any) (map[string]any, error) {
+	current, err := r.GetServiceAccount(project, email)
+	if err != nil {
+		return nil, err
+	}
+	merged := patchMerge(current, patch, "name", "email", "project", "uniqueId")
+	merged["project"] = project
+	merged["email"] = email
+	if name := getString(current, "name"); name != "" {
+		merged["name"] = name
+	}
+	raw, err := marshalData(merged)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := r.db.Exec(`UPDATE iam_service_accounts SET data = ? WHERE project = ? AND email = ?`, string(raw), project, email); err != nil {
+		return nil, mapInsertError(err)
+	}
+	return merged, nil
+}
+
 func (r *Repository) CreateSAKey(project, serviceAccountEmail string, data map[string]any) (map[string]any, error) {
 	name := getString(data, "name")
 	if name == "" {
@@ -1277,6 +1298,13 @@ func (r *Repository) Snapshot() error {
 
 	if err := os.MkdirAll(filepath.Dir(snapshotPath), 0o755); err != nil {
 		return err
+	}
+	// SQLite's VACUUM INTO refuses to overwrite an existing target. The
+	// repository may already hold a baseline from a prior snapshot call
+	// (multi-stage e2e runs do this between create and update phases),
+	// so we remove the stale file first and let VACUUM INTO recreate it.
+	if err := os.Remove(snapshotPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove stale snapshot: %w", err)
 	}
 	if _, err := r.db.Exec("PRAGMA wal_checkpoint(FULL)"); err != nil {
 		return err
@@ -2298,6 +2326,24 @@ func (r *Repository) ListSecrets(project string) ([]map[string]any, error) {
 
 func (r *Repository) DeleteSecret(project, name string) error {
 	return r.deleteWithResult(`DELETE FROM secretmanager_secrets WHERE project = ? AND name = ?`, project, name)
+}
+
+func (r *Repository) UpdateSecret(project, name string, patch map[string]any) (map[string]any, error) {
+	current, err := r.GetSecret(project, name)
+	if err != nil {
+		return nil, err
+	}
+	merged := patchMerge(current, patch, "name", "project")
+	merged["project"] = project
+	merged["name"] = fmt.Sprintf("projects/%s/secrets/%s", project, name)
+	raw, err := marshalData(merged)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := r.db.Exec(`UPDATE secretmanager_secrets SET data = ? WHERE project = ? AND name = ?`, string(raw), project, name); err != nil {
+		return nil, mapInsertError(err)
+	}
+	return merged, nil
 }
 
 func (r *Repository) CreateSecretVersion(project, secretName string, data map[string]any) (map[string]any, error) {

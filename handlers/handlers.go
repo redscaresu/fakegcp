@@ -172,6 +172,7 @@ func (app *Application) RegisterRoutes(r chi.Router) {
 				r.Post("/backendServices", app.CreateBackendService)
 				r.Get("/backendServices/{name}", app.GetBackendService)
 				r.Patch("/backendServices/{name}", app.UpdateBackendService)
+			r.Put("/backendServices/{name}", app.UpdateBackendService)
 				r.Delete("/backendServices/{name}", app.DeleteBackendService)
 
 				r.Get("/sslCertificates", app.ListSSLCertificates)
@@ -290,6 +291,7 @@ func (app *Application) RegisterRoutes(r chi.Router) {
 			r.Post("/serviceAccounts", app.CreateServiceAccount)
 			r.Get("/serviceAccounts/{email}", app.GetServiceAccount)
 			r.Delete("/serviceAccounts/{email}", app.DeleteServiceAccount)
+			r.Patch("/serviceAccounts/{email}", app.UpdateServiceAccount)
 
 			r.Post("/serviceAccounts/{email}/keys", app.CreateSAKey)
 			r.Get("/serviceAccounts/{email}/keys", app.ListSAKeys)
@@ -300,6 +302,7 @@ func (app *Application) RegisterRoutes(r chi.Router) {
 			r.Get("/secrets", app.ListSecrets)
 			r.Get("/secrets/{secret}", app.GetSecret)
 			r.Delete("/secrets/{secret}", app.DeleteSecret)
+			r.Patch("/secrets/{secret}", app.UpdateSecret)
 			r.Post("/secrets/{secret}:addVersion", app.CreateSecretVersion)
 			r.Get("/secrets/{secret}/versions", app.ListSecretVersions)
 			r.Get("/secrets/{secret}/versions/{version}", app.GetSecretVersion)
