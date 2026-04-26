@@ -159,16 +159,20 @@ fakegcp/
 
 ## Status
 
-| Service | Verified | Notes |
-|---|---|---|
-| Compute (instances, networks, subnetworks, firewalls, disks, addresses) | ✅ | self-link rewrite on Create |
-| Compute LB stack (forwarding rules, backend services, health checks, URL maps, target HTTPS proxies, SSL certs) | ✅ | global only |
-| Container / GKE (clusters, node pools) | ✅ | cluster delete cascades to pools |
-| Cloud SQL (instances, databases, users) | ✅ | private + public IP configurations |
-| IAM (service accounts, policies, sa-keys) | ✅ | fully-qualified `serviceAccount:` principals |
-| Storage (buckets) | ✅ | uniform bucket-level access, encryption |
-| Pub/Sub (topics, subscriptions) | ⚠️ handler only | |
-| DNS (managed zones, record sets) | ⚠️ handler only | |
-| Cloud Run (services) | ⚠️ handler only | |
-| Secret Manager (secrets, versions) | ⚠️ handler only | |
-| Operations | ✅ | always-DONE shim |
+Three columns: **Handler** = HTTP routes wired, **Tests** = `handlers_test.go` covers CRUD (and FK / cascade where the resource has dependents), **Terraform example** = `examples/working/<name>` exercises a full `apply → plan (no-op exit 0) → destroy` cycle against the real `hashicorp/google` provider. A row is fully verified only when all three are checked.
+
+| Service | Handler | Tests | Terraform example | Notes |
+|---|---|---|---|---|
+| Compute (instances, networks, subnetworks, firewalls, disks, addresses) | ✅ | ✅ | [`examples/working/basic_instance`](examples/working/basic_instance) | self-link rewrite on Create |
+| Compute LB stack (forwarding rules, backend services, health checks, URL maps, target HTTPS proxies, SSL certs) | ✅ | ✅ | — | global only; example pending |
+| Container / GKE (clusters, node pools) | ✅ | ✅ | [`examples/working/gke_cluster`](examples/working/gke_cluster) | cluster delete cascades to pools |
+| Cloud SQL (instances, databases, users) | ✅ | ✅ | [`examples/working/cloud_sql`](examples/working/cloud_sql) | private + public IP configurations |
+| IAM (service accounts, policies, sa-keys, bindings) | ✅ | ✅ | — | fully-qualified `serviceAccount:` principals |
+| Storage (buckets) | ✅ | ✅ | — | uniform bucket-level access, encryption |
+| Pub/Sub (topics, subscriptions) | ✅ | ✅ FK + cascade | — | TestPubSubTopicCRUD, TestPubSubSubscriptionFKViolation, TestPubSubTopicDeleteWithSubscriptions |
+| DNS (managed zones, record sets) | ✅ | ✅ FK + cascade | — | TestDNSZoneCRUD, TestDNSRecordSetCRUD, TestDNSRecordSetFKViolation, TestDNSZoneDeleteWithRecords |
+| Cloud Run (services) | ✅ | ✅ CRUD | — | TestCloudRunServiceCRUD |
+| Secret Manager (secrets, versions) | ✅ | ✅ FK + cascade | — | TestSecretCRUD, TestSecretVersionCRUD, TestSecretDeleteWithVersions |
+| Operations | ✅ | ✅ | n/a | always-DONE shim used by every mutation |
+
+**Caveat on the bottom four**: handler + handler-test coverage means the route accepts/persists/returns the GCP wire shape correctly *as observed by the test*, but the wire shape hasn't been pinned against the live `hashicorp/google` Terraform provider. A drift could exist between what the provider sends/expects and what fakegcp accepts/returns that an HCL example would surface. Adding a `examples/working/<service>` directory with a proven `apply → plan (no-op) → destroy` cycle is the path from this row to fully verified.
