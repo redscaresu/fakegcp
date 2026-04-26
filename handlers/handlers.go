@@ -196,7 +196,12 @@ func (app *Application) RegisterRoutes(r chi.Router) {
 				r.Get("/forwardingRules/{name}", app.GetGlobalForwardingRule)
 				r.Delete("/forwardingRules/{name}", app.DeleteGlobalForwardingRule)
 
-				r.Get("/operations/{name}", app.GetGlobalOperation)
+				// Catch-all setLabels for global resources. terraform-provider-
+			// google issues this on every global compute resource even
+			// when there are no labels configured.
+			r.Post("/{collection}/{name}/setLabels", app.SetLabelsGlobal)
+
+			r.Get("/operations/{name}", app.GetGlobalOperation)
 			})
 
 			// Zonal resources
@@ -299,6 +304,8 @@ func (app *Application) RegisterRoutes(r chi.Router) {
 			r.Get("/secrets/{secret}/versions", app.ListSecretVersions)
 			r.Get("/secrets/{secret}/versions/{version}", app.GetSecretVersion)
 			r.Post("/secrets/{secret}/versions/{version}:destroy", app.DestroySecretVersion)
+			r.Post("/secrets/{secret}/versions/{version}:enable", app.EnableSecretVersion)
+			r.Post("/secrets/{secret}/versions/{version}:disable", app.DisableSecretVersion)
 
 			r.Put("/topics/{topic}", app.CreateTopic)
 			r.Get("/topics", app.ListTopics)
@@ -318,12 +325,19 @@ func (app *Application) RegisterRoutes(r chi.Router) {
 			r.Get("/managedZones", app.ListDNSZones)
 			r.Get("/managedZones/{zone}", app.GetDNSZone)
 			r.Patch("/managedZones/{zone}", app.UpdateDNSZone)
+			r.Put("/managedZones/{zone}", app.UpdateDNSZone)
 			r.Delete("/managedZones/{zone}", app.DeleteDNSZone)
 
 			r.Post("/managedZones/{zone}/rrsets", app.CreateDNSRecordSet)
 			r.Get("/managedZones/{zone}/rrsets", app.ListDNSRecordSets)
 			r.Get("/managedZones/{zone}/rrsets/{name}/{type}", app.GetDNSRecordSet)
 			r.Delete("/managedZones/{zone}/rrsets/{name}/{type}", app.DeleteDNSRecordSet)
+
+			// google_dns_record_set in the Terraform provider mutates rrsets
+			// via the v1 transactional changes API rather than addressing
+			// rrsets directly. Route those calls through to the rrset store.
+			r.Post("/managedZones/{zone}/changes", app.CreateDNSChange)
+			r.Get("/managedZones/{zone}/changes/{change}", app.GetDNSChange)
 		})
 
 		// Cloud Run v2

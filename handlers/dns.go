@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
 	"time"
 
@@ -156,6 +157,76 @@ func (app *Application) GetDNSRecordSet(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, http.StatusOK, item)
+}
+
+// CreateDNSChange implements the v1 changes API the Google Terraform
+// provider uses to mutate record sets transactionally. We unwrap the
+// {additions, deletions} envelope and dispatch to the rrset CRUD
+// operations one at a time. The response shape is the standard
+// dns#change envelope.
+func (app *Application) CreateDNSChange(w http.ResponseWriter, r *http.Request) {
+	project := chi.URLParam(r, "project")
+	zone := chi.URLParam(r, "zone")
+
+	body, err := decodeBody(r)
+	if err != nil {
+		writeGCPError(w, http.StatusBadRequest, "Invalid JSON body", "invalid")
+		return
+	}
+	deletions, _ := body["deletions"].([]any)
+	for _, d := range deletions {
+		entry, _ := d.(map[string]any)
+		if entry == nil {
+			continue
+		}
+		name, _ := entry["name"].(string)
+		rrtype, _ := entry["type"].(string)
+		if name == "" || rrtype == "" {
+			continue
+		}
+		if err := app.repo.DeleteDNSRecordSet(project, zone, name, rrtype); err != nil {
+			writeDomainError(w, err)
+			return
+		}
+	}
+	additions, _ := body["additions"].([]any)
+	for _, a := range additions {
+		entry, _ := a.(map[string]any)
+		if entry == nil {
+			continue
+		}
+		name, _ := entry["name"].(string)
+		rrtype, _ := entry["type"].(string)
+		if name == "" || rrtype == "" {
+			writeGCPError(w, http.StatusBadRequest, "Missing required field: name/type in addition", "required")
+			return
+		}
+		entry["kind"] = "dns#resourceRecordSet"
+		if _, err := app.repo.CreateDNSRecordSet(project, zone, entry); err != nil {
+			writeCreateError(w, err)
+			return
+		}
+	}
+
+	body["kind"] = "dns#change"
+	body["id"] = fmt.Sprintf("change-%d", time.Now().UnixNano())
+	body["status"] = "done"
+	body["startTime"] = time.Now().Format(time.RFC3339)
+	writeJSON(w, http.StatusOK, body)
+}
+
+// GetDNSChange returns a stub change record. fakegcp applies changes
+// synchronously inside CreateDNSChange, so any change id the provider
+// polls for is, by definition, already done. Echoing back a done shape
+// is enough for terraform-provider-google's wait loop.
+func (app *Application) GetDNSChange(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "change")
+	writeJSON(w, http.StatusOK, map[string]any{
+		"kind":      "dns#change",
+		"id":        id,
+		"status":    "done",
+		"startTime": time.Now().Format(time.RFC3339),
+	})
 }
 
 func (app *Application) DeleteDNSRecordSet(w http.ResponseWriter, r *http.Request) {

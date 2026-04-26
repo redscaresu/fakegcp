@@ -557,3 +557,21 @@ func (app *Application) DeleteGlobalForwardingRule(w http.ResponseWriter, r *htt
 	}
 	writeJSON(w, http.StatusOK, app.newOperation(r, project, "", "", getString(item, "selfLink"), "delete"))
 }
+
+// SetLabelsGlobal handles the {resource}/{name}/setLabels POST that
+// terraform-provider-google issues for every global compute resource
+// it creates, even when no labels are configured. We don't model
+// labels per-resource yet, so the handler accepts the call and returns
+// a DONE operation. Body shape is {labels: {...}, labelFingerprint:
+// "..."}; we ignore the contents.
+func (app *Application) SetLabelsGlobal(w http.ResponseWriter, r *http.Request) {
+	project := chi.URLParam(r, "project")
+	collection := chi.URLParam(r, "collection")
+	name := chi.URLParam(r, "name")
+	if _, err := decodeBody(r); err != nil {
+		writeGCPError(w, http.StatusBadRequest, "Invalid JSON body", "invalid")
+		return
+	}
+	target := globalResourceLink(r, project, collection, name)
+	writeJSON(w, http.StatusOK, app.newOperation(r, project, "", "", target, "setLabels"))
+}

@@ -280,6 +280,15 @@ func newID() string {
 	return uuid.NewString()
 }
 
+// numericIntID returns a positive int64 suitable for resources whose
+// API surface declares the id field as a number rather than a string.
+// google_dns_managed_zone is the load-bearing case: the Terraform
+// provider reads `managed_zone_id` from id and unmarshals it as an int.
+func numericIntID() int64 {
+	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+	return r.Int63n(1<<62) + 1
+}
+
 func numericID() string {
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 	buf := make([]byte, 19)
@@ -1837,8 +1846,11 @@ func (r *Repository) CreateDNSZone(project string, data map[string]any) (map[str
 	}
 	data["name"] = name
 	data["project"] = project
-	if getString(data, "id") == "" {
-		data["id"] = numericID()
+	// google_dns_managed_zone reads `managed_zone_id` from the id field
+	// as an int. Match the Cloud DNS API by emitting a numeric id rather
+	// than the digit-string numericID() default.
+	if _, hasID := data["id"]; !hasID {
+		data["id"] = numericIntID()
 	}
 	if getString(data, "creationTime") == "" {
 		data["creationTime"] = nowRFC3339()

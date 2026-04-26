@@ -17,5 +17,6 @@ provider "google" {
     send_after = "0s"
   }
 
-  secret_manager_custom_endpoint = "http://localhost:8080/v1/"
+  iam_custom_endpoint                = "http://localhost:8080/v1/"
+  cloud_resource_manager_custom_endpoint = "http://localhost:8080/v1/"
 }

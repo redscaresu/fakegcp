@@ -27,7 +27,14 @@ func (app *Application) CreateCloudRunService(w http.ResponseWriter, r *http.Req
 		writeGCPError(w, http.StatusBadRequest, "Invalid JSON body", "invalid")
 		return
 	}
-	name, _ := body["name"].(string)
+	// Per the Cloud Run v2 spec, the service identifier is the `serviceId`
+	// query parameter; the body's `name` field is server-assigned. We
+	// accept either to keep direct API tests working alongside the
+	// Terraform provider's calls.
+	name := r.URL.Query().Get("serviceId")
+	if name == "" {
+		name, _ = body["name"].(string)
+	}
 	if name == "" {
 		writeGCPError(w, http.StatusBadRequest, "Missing required field: name", "required")
 		return

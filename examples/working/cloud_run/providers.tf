@@ -17,5 +17,5 @@ provider "google" {
     send_after = "0s"
   }
 
-  cloud_run_v2_custom_endpoint = "http://localhost:8080/"
+  cloud_run_v2_custom_endpoint = "http://localhost:8080/v2/"
 }

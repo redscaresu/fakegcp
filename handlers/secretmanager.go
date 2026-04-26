@@ -16,7 +16,12 @@ func (app *Application) CreateSecret(w http.ResponseWriter, r *http.Request) {
 		writeGCPError(w, http.StatusBadRequest, "Invalid JSON body", "invalid")
 		return
 	}
-	secretID, _ := body["secretId"].(string)
+	// secretId is a query parameter per the Secret Manager v1 spec, but we
+	// also accept it from the body for tooling/test convenience.
+	secretID := r.URL.Query().Get("secretId")
+	if secretID == "" {
+		secretID, _ = body["secretId"].(string)
+	}
 	if secretID == "" {
 		writeGCPError(w, http.StatusBadRequest, "Missing required field: secretId", "required")
 		return
@@ -147,4 +152,31 @@ func (app *Application) DestroySecretVersion(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{})
+}
+
+// EnableSecretVersion + DisableSecretVersion implement the v1
+// :enable/:disable verbs. We don't model state transitions in detail
+// — we just look the version up to confirm it exists and echo back
+// the current record with the requested state set.
+func (app *Application) EnableSecretVersion(w http.ResponseWriter, r *http.Request) {
+	app.setSecretVersionState(w, r, "ENABLED")
+}
+
+func (app *Application) DisableSecretVersion(w http.ResponseWriter, r *http.Request) {
+	app.setSecretVersionState(w, r, "DISABLED")
+}
+
+func (app *Application) setSecretVersionState(w http.ResponseWriter, r *http.Request, state string) {
+	project := chi.URLParam(r, "project")
+	secret := chi.URLParam(r, "secret")
+	version := chi.URLParam(r, "version")
+
+	name := fmt.Sprintf("projects/%s/secrets/%s/versions/%s", project, secret, version)
+	item, err := app.repo.GetSecretVersion(name)
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	item["state"] = state
+	writeJSON(w, http.StatusOK, item)
 }
