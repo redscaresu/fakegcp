@@ -2,6 +2,7 @@ package handlers_test
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/redscaresu/fakegcp/testutil"
@@ -113,6 +114,114 @@ func TestGetDNSChange404ForUnknownID(t *testing.T) {
 
 	resp, _ := testutil.DoGet(t, srv, "/dns/v1/projects/"+project+"/managedZones/zone1/changes/never-existed")
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+}
+
+// TestLBChainUpdateFKValidation pins the FK gates the update-path
+// adds for the LB chain. Each subtest seeds a minimal valid LB
+// resource, then issues the relevant PATCH/PUT with a missing
+// reference and asserts a 400 (or 404) — without the gate, a
+// non-existent ref would slip through the create gate that already
+// guards the same field.
+func TestLBChainUpdateFKValidation(t *testing.T) {
+	srv, cleanup := testutil.NewTestServer(t)
+	defer cleanup()
+
+	// Seed: a minimal valid LB chain we can later patch with bad refs.
+	mustCreate(t, srv, testutil.ComputePath(project, "global", "healthChecks"), map[string]any{
+		"name": "good-hc",
+		"httpHealthCheck": map[string]any{"port": 80, "requestPath": "/"},
+	})
+	mustCreate(t, srv, testutil.ComputePath(project, "global", "backendServices"), map[string]any{
+		"name":         "good-bs",
+		"protocol":     "HTTP",
+		"healthChecks": []any{"good-hc"},
+	})
+	mustCreate(t, srv, testutil.ComputePath(project, "global", "urlMaps"), map[string]any{
+		"name":           "good-um",
+		"defaultService": "good-bs",
+	})
+	mustCreate(t, srv, testutil.ComputePath(project, "global", "sslCertificates"), map[string]any{
+		"name":        "good-cert",
+		"privateKey":  "fake",
+		"certificate": "fake",
+	})
+	mustCreate(t, srv, testutil.ComputePath(project, "global", "targetHttpsProxies"), map[string]any{
+		"name":            "good-thp",
+		"urlMap":          "good-um",
+		"sslCertificates": []any{"good-cert"},
+	})
+
+	t.Run("backendService PATCH rejects missing healthCheck", func(t *testing.T) {
+		resp, _ := testutil.DoPatch(t, srv, testutil.ComputePath(project, "global", "backendServices", "good-bs"), map[string]any{
+			"healthChecks": []any{"missing-hc"},
+		})
+		assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+	})
+
+	t.Run("backendService PATCH rejects cross-project healthCheck self-link", func(t *testing.T) {
+		resp, _ := testutil.DoPatch(t, srv, testutil.ComputePath(project, "global", "backendServices", "good-bs"), map[string]any{
+			"healthChecks": []any{"projects/other/global/healthChecks/good-hc"},
+		})
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	})
+
+	t.Run("urlMap PATCH rejects missing defaultService", func(t *testing.T) {
+		resp, _ := testutil.DoPatch(t, srv, testutil.ComputePath(project, "global", "urlMaps", "good-um"), map[string]any{
+			"defaultService": "missing-bs",
+		})
+		assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+	})
+
+	t.Run("targetHttpsProxy PATCH rejects missing urlMap", func(t *testing.T) {
+		resp, _ := testutil.DoPatch(t, srv, testutil.ComputePath(project, "global", "targetHttpsProxies", "good-thp"), map[string]any{
+			"urlMap": "missing-um",
+		})
+		assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+	})
+
+	t.Run("targetHttpsProxy PATCH rejects missing sslCertificate", func(t *testing.T) {
+		resp, _ := testutil.DoPatch(t, srv, testutil.ComputePath(project, "global", "targetHttpsProxies", "good-thp"), map[string]any{
+			"sslCertificates": []any{"missing-cert"},
+		})
+		assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+	})
+
+	t.Run("forwardingRule create rejects missing target", func(t *testing.T) {
+		resp, _ := testutil.DoCreate(t, srv, testutil.ComputePath(project, "global", "forwardingRules"), map[string]any{
+			"name":      "fr-bad-target",
+			"target":    "projects/" + project + "/global/targetHttpsProxies/missing-thp",
+			"portRange": "443",
+		})
+		assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+	})
+
+	t.Run("forwardingRule create rejects unsupported target collection", func(t *testing.T) {
+		resp, _ := testutil.DoCreate(t, srv, testutil.ComputePath(project, "global", "forwardingRules"), map[string]any{
+			"name":      "fr-unsupported-target",
+			"target":    "projects/" + project + "/global/targetTcpProxies/whatever",
+			"portRange": "443",
+		})
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	})
+
+	t.Run("forwardingRule create rejects nonexistent IPAddress self-link", func(t *testing.T) {
+		resp, _ := testutil.DoCreate(t, srv, testutil.ComputePath(project, "global", "forwardingRules"), map[string]any{
+			"name":      "fr-bad-ip",
+			"target":    "good-thp",
+			"IPAddress": "projects/" + project + "/global/addresses/missing-addr",
+			"portRange": "443",
+		})
+		assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+	})
+}
+
+// mustCreate wraps DoCreate with a require on a 200, so test setup
+// failures surface locally instead of cascading into mysterious 404s
+// in later assertions.
+func mustCreate(t *testing.T, srv *httptest.Server, path string, body map[string]any) {
+	t.Helper()
+	resp, _ := testutil.DoCreate(t, srv, path, body)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "setup create failed: POST %s", path)
 }
 
 // TestDNSChangeRollbackOrder pins the rollback order for the

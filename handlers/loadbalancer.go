@@ -42,6 +42,35 @@ func (app *Application) validateScalarFK(w http.ResponseWriter, body map[string]
 	return true
 }
 
+// validateForwardingRuleIPAddress validates the global forwarding
+// rule's IPAddress when it's set to a self-link of a reserved global
+// address. A literal IPv4/IPv6 string passes through unchanged — the
+// real Compute API accepts both forms.
+func (app *Application) validateForwardingRuleIPAddress(w http.ResponseWriter, body map[string]any, project string) bool {
+	ref, _ := body["IPAddress"].(string)
+	if ref == "" {
+		return true
+	}
+	// Heuristic: if the reference contains "/" it's a path of some
+	// kind — a self-link or a relative resource path. Otherwise
+	// treat it as a literal IP and let it through (Compute accepts
+	// it).
+	if !strings.Contains(ref, "/") {
+		return true
+	}
+	name, ok := computeRefName(ref, project, "addresses")
+	if !ok {
+		writeGCPError(w, http.StatusBadRequest,
+			fmt.Sprintf("Invalid IPAddress reference %q", ref), "invalid")
+		return false
+	}
+	if _, err := app.repo.GetGlobalAddress(project, name); err != nil {
+		writeDomainError(w, err)
+		return false
+	}
+	return true
+}
+
 // validateForwardingRuleTarget validates the global forwarding rule's
 // `target`. Unlike most LB FKs, the target can point at one of
 // several collections (targetHttpProxies, targetHttpsProxies — in
@@ -670,6 +699,13 @@ func (app *Application) CreateGlobalForwardingRule(w http.ResponseWriter, r *htt
 	// the request when the collection isn't a known target type, or
 	// when the target itself doesn't exist in this project.
 	if !app.validateForwardingRuleTarget(w, body, project) {
+		return
+	}
+	// IPAddress may be a literal IP (string) or a self-link to a
+	// reserved global address. computeRefName returns a non-IP-shaped
+	// string only for actual self-links; literal IPs go straight
+	// through (Cloud Compute treats both as valid).
+	if !app.validateForwardingRuleIPAddress(w, body, project) {
 		return
 	}
 	created, err := app.repo.CreateGlobalForwardingRule(project, body)
