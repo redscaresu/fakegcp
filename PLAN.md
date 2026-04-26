@@ -27,7 +27,8 @@ fakegcp/
 │   ├── operations.go                # Operation polling (always DONE)
 │   ├── admin.go                     # /mock/reset, /mock/state, /mock/snapshot
 │   ├── unimplemented.go             # 501 catch-all
-│   └── handlers_test.go            # Integration tests
+│   ├── handlers_test.go             # Integration tests
+│   └── regression_test.go           # Targeted regression coverage
 ├── repository/repository.go         # SQLite schema, CRUD, FK enforcement
 ├── models/models.go                 # ErrNotFound, ErrConflict, ErrAlreadyExists
 ├── testutil/testutil.go             # NewTestServer, HTTP helpers
