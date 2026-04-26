@@ -49,7 +49,7 @@ terraform apply -auto-approve
 terraform destroy -auto-approve
 ```
 
-The `misconfigured/` examples will error during apply. The comments at the top of each `main.tf` show the exact error and how to fix it.
+The `misconfigured/` examples will error during apply with a 404 from fakegcp. The comments at the top of each `main.tf` show the error shape and how to fix it.
 
 The `updates/` examples are split across two `tfvars` files so the apply-then-update lifecycle is explicit:
 

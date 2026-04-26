@@ -223,15 +223,20 @@ func (app *Application) CreateDNSChange(w http.ResponseWriter, r *http.Request) 
 	}
 
 	rollback := func(deleted []rrset, added []rrset) {
-		// Re-add records we deleted (best-effort).
+		// Order matters: a (delete A, add replacement A) followed by a
+		// failed third op must end with the original A in place. We
+		// must undo additions FIRST so the slot is empty, then re-add
+		// the records we removed. Reversing the order would have the
+		// re-create collide with the addition we just inserted, get
+		// silently rejected, and then the delete-of-addition would
+		// leave neither rrset present.
+		for _, rec := range added {
+			_ = app.repo.DeleteDNSRecordSet(project, zone, rec.name, rec.rtype)
+		}
 		for _, rec := range deleted {
 			if rec.entry != nil {
 				_, _ = app.repo.CreateDNSRecordSet(project, zone, rec.entry)
 			}
-		}
-		// Remove records we added.
-		for _, rec := range added {
-			_ = app.repo.DeleteDNSRecordSet(project, zone, rec.name, rec.rtype)
 		}
 	}
 

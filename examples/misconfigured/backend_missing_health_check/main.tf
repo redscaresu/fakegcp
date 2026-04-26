@@ -14,10 +14,13 @@
 # ── What fakegcp catches ────────────────────────────────────────────────
 #
 #   $ terraform apply
-#   Error: googleapi: Error 404: health check "missing-hc" not found
+#   Error: googleapi: Error 404: The resource was not found
 #
-#   fakegcp's compute_backend_services FK validates that every entry in
-#   `healthChecks` resolves to an existing health check before insert.
+#   fakegcp's CreateBackendService handler resolves every entry in
+#   `healthChecks` to an existing health check before insert. The
+#   reference must be a bare name or a same-project, same-collection
+#   self-link; cross-project or cross-collection self-links are
+#   rejected with a 400 even if a same-named local resource exists.
 resource "google_compute_backend_service" "broken" {
   name          = "lb-be"
   protocol      = "HTTP"

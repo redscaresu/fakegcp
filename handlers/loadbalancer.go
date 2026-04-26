@@ -20,6 +20,47 @@ func lastPathSegment(s string) string {
 	return s
 }
 
+// computeRefName extracts the leaf resource name from a compute
+// self-link or relative path like
+// `projects/<project>/global/<collection>/<name>` (with optional
+// `compute/v1/` prefix or absolute URL prefix).
+//
+// It enforces:
+//   - the path matches the expected (project, collection) tail; and
+//   - the project, when present, is the project we're operating in.
+//
+// Returning ("", false) means the reference is malformed or points
+// at a different project/collection — both of which are FK violations.
+func computeRefName(ref, project, collection string) (string, bool) {
+	if ref == "" {
+		return "", false
+	}
+	// A bare name with no slashes is allowed (the GCP API accepts it).
+	if !strings.Contains(ref, "/") {
+		return ref, true
+	}
+	// Strip protocol + host so the remaining path always starts at the
+	// /compute/... segment. URL-shaped refs vs already-relative refs
+	// are normalised here.
+	if i := strings.Index(ref, "://"); i >= 0 {
+		if j := strings.Index(ref[i+3:], "/"); j >= 0 {
+			ref = ref[i+3+j:]
+		}
+	}
+	ref = strings.TrimPrefix(ref, "/")
+	ref = strings.TrimPrefix(ref, "compute/v1/")
+	parts := strings.Split(ref, "/")
+	// projects/<project>/global/<collection>/<name>
+	if len(parts) == 5 &&
+		parts[0] == "projects" &&
+		parts[1] == project &&
+		parts[2] == "global" &&
+		parts[3] == collection {
+		return parts[4], true
+	}
+	return "", false
+}
+
 func globalResourceLink(r *http.Request, project, collection, name string) string {
 	return selfLink(r, "compute", "v1", "projects", project, "global", collection, name)
 }
@@ -210,14 +251,22 @@ func (app *Application) CreateBackendService(w http.ResponseWriter, r *http.Requ
 	// rejects backend-service create with a 404 if any healthChecks
 	// entry doesn't resolve — without this FK check, a typo'd self-link
 	// or a deleted health check creates a backend service that points
-	// at nothing.
+	// at nothing. We require the reference to either be a bare name or
+	// a self-link in the same project + healthChecks collection; a
+	// reference pointing at a different project or collection is
+	// rejected even if a same-named local health check happens to exist.
 	if hcs, ok := body["healthChecks"].([]any); ok {
 		for _, hc := range hcs {
-			selfLink, _ := hc.(string)
-			if selfLink == "" {
+			ref, _ := hc.(string)
+			if ref == "" {
 				continue
 			}
-			hcName := lastPathSegment(selfLink)
+			hcName, ok := computeRefName(ref, project, "healthChecks")
+			if !ok {
+				writeGCPError(w, http.StatusBadRequest,
+					fmt.Sprintf("Invalid health-check reference %q", ref), "invalid")
+				return
+			}
 			if _, err := app.repo.GetHealthCheck(project, hcName); err != nil {
 				writeDomainError(w, err)
 				return

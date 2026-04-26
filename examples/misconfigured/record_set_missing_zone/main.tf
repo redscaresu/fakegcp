@@ -14,10 +14,11 @@
 # ── What fakegcp catches ────────────────────────────────────────────────
 #
 #   $ terraform apply
-#   Error: googleapi: Error 404: managed zone "missing-zone" not found
+#   Error: googleapi: Error 404: Referenced resource not found
 #
-#   fakegcp's dns_record_sets table joins to dns_managed_zones; the
-#   create rejects because no parent zone row exists.
+#   The DNS changes API resolves the parent managed zone before
+#   applying additions or deletions. If no parent zone exists in this
+#   project, the change is rejected and the rrset is not created.
 resource "google_dns_record_set" "broken" {
   name         = "host.example.invalid."
   managed_zone = "missing-zone"

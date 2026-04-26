@@ -15,17 +15,19 @@
 # ── What fakegcp catches ────────────────────────────────────────────────
 #
 #   $ terraform apply
-#   Error: googleapi: Error 404: topic projects/fake-project/topics/missing-topic not found
+#   Error: googleapi: Error 404: Referenced resource not found
 #
-#   fakegcp's pubsub_subscriptions table has a foreign-key constraint on
-#   topic_name; the create fails because no topic row exists.
+#   The subscription create handler resolves the referenced topic
+#   before insert. If no topic row exists in this project, the create
+#   fails — same outcome as the real Pub/Sub API, just earlier in the
+#   loop than a full plan-and-apply against production.
 #
 # ── Why this matters ────────────────────────────────────────────────────
 #
-#   In production the FK violation is the same — the subscription create
-#   404s. In CI without fakegcp, this typically gets discovered on the
-#   first real-environment apply, after the broken Terraform has already
-#   merged.
+#   In production the FK violation has the same shape — the
+#   subscription create 404s. In CI without fakegcp, this typically
+#   gets discovered on the first real-environment apply, after the
+#   broken Terraform has already merged.
 resource "google_pubsub_subscription" "broken" {
   name  = "events-pull"
   topic = "projects/fake-project/topics/missing-topic"

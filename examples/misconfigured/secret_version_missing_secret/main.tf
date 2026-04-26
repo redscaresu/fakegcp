@@ -13,11 +13,11 @@
 # ── What fakegcp catches ────────────────────────────────────────────────
 #
 #   $ terraform apply
-#   Error: googleapi: Error 404: secret "missing-secret" not found
+#   Error: googleapi: Error 404: Referenced resource not found
 #
-#   fakegcp's secretmanager_versions table joins to secretmanager_secrets;
-#   the addVersion call rejects because the parent secret row doesn't
-#   exist.
+#   The Secret Manager addVersion handler resolves the parent secret
+#   before inserting a version. If the parent secret doesn't exist in
+#   this project, the call is rejected.
 resource "google_secret_manager_secret_version" "broken" {
   secret      = "projects/fake-project/secrets/missing-secret"
   secret_data = "fakegcp-test-payload"
