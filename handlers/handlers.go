@@ -156,12 +156,15 @@ func writeDomainError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, models.ErrNotFound):
 		writeGCPError(w, http.StatusNotFound, "The resource was not found", "notFound")
+	case errors.Is(err, models.ErrInUse):
+		writeGCPError(w, http.StatusConflict, "The resource has dependents and cannot be deleted", "resourceInUseByAnotherResource")
+	case errors.Is(err, models.ErrTerminalState):
+		writeGCPError(w, http.StatusConflict, "The resource is in a terminal state", "conflict")
 	case errors.Is(err, models.ErrConflict):
-		// Neutral 409 message — ErrConflict is raised by both
-		// "has dependents, can't delete" and "resource state is
-		// terminal, can't transition" (Secret Manager DESTROYED).
-		// A delete-specific reason would mislead callers of the
-		// state-transition path.
+		// Generic catch-all for callers that still raise the
+		// unspecialised sentinel. Prefer ErrInUse or
+		// ErrTerminalState so the 409 payload matches the real
+		// Cloud API for the specific class of conflict.
 		writeGCPError(w, http.StatusConflict, "The resource is in a conflicting state", "conflict")
 	default:
 		writeGCPError(w, http.StatusInternalServerError, "Internal error", "internalError")

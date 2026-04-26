@@ -271,7 +271,11 @@ func mapDeleteError(err error) error {
 	}
 	s := strings.ToUpper(err.Error())
 	if strings.Contains(s, "FOREIGN KEY") {
-		return models.ErrConflict
+		// FK violation on delete = the resource has live dependents.
+		// Use the in-use sentinel so writeDomainError emits the
+		// resourceInUseByAnotherResource reason real Cloud APIs
+		// return for FK-protected deletes.
+		return models.ErrInUse
 	}
 	return err
 }
@@ -2400,7 +2404,7 @@ func (r *Repository) SetSecretVersionState(name, state string) (map[string]any, 
 		return nil, err
 	}
 	if getString(current, "state") == "DESTROYED" {
-		return nil, models.ErrConflict
+		return nil, models.ErrTerminalState
 	}
 	current["state"] = state
 	raw, err := marshalData(current)

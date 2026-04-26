@@ -362,17 +362,47 @@ func TestEnableDisableRejectDestroyedVersion(t *testing.T) {
 	resp, _ := testutil.DoCreate(t, srv, testutil.IAMPath(project, "secrets", "terminal", "versions", "1:destroy"), map[string]any{})
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
-	resp, _ = testutil.DoCreate(t, srv, testutil.IAMPath(project, "secrets", "terminal", "versions", "1:enable"), map[string]any{})
+	resp, body := testutil.DoCreate(t, srv, testutil.IAMPath(project, "secrets", "terminal", "versions", "1:enable"), map[string]any{})
 	assert.Equal(t, http.StatusConflict, resp.StatusCode,
 		"DESTROYED is terminal — :enable must not resurrect the version")
+	assertConflictReason(t, body, "conflict")
+	assertContainsTerminal(t, body)
 
-	resp, _ = testutil.DoCreate(t, srv, testutil.IAMPath(project, "secrets", "terminal", "versions", "1:disable"), map[string]any{})
+	resp, body = testutil.DoCreate(t, srv, testutil.IAMPath(project, "secrets", "terminal", "versions", "1:disable"), map[string]any{})
 	assert.Equal(t, http.StatusConflict, resp.StatusCode,
 		"DESTROYED is terminal — :disable must not silently rewrite state")
+	assertConflictReason(t, body, "conflict")
+	assertContainsTerminal(t, body)
 
-	resp, body := testutil.DoGet(t, srv, testutil.IAMPath(project, "secrets", "terminal", "versions", "1"))
+	resp, body = testutil.DoGet(t, srv, testutil.IAMPath(project, "secrets", "terminal", "versions", "1"))
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Equal(t, "DESTROYED", body["state"], "version must remain DESTROYED after rejected resurrects")
+}
+
+// assertConflictReason asserts the GCP-shaped error body has the
+// expected `reason` on the first errors[] entry, so we don't just
+// check that some 409 came back but pin the actual payload.
+func assertConflictReason(t *testing.T, body map[string]any, want string) {
+	t.Helper()
+	envelope, ok := body["error"].(map[string]any)
+	require.True(t, ok, "expected error envelope, got %v", body)
+	errs, _ := envelope["errors"].([]any)
+	require.Greater(t, len(errs), 0, "expected at least one error entry")
+	first, _ := errs[0].(map[string]any)
+	require.NotNil(t, first)
+	assert.Equal(t, want, first["reason"])
+}
+
+// assertContainsTerminal asserts the 409 message describes the
+// terminal-state class of conflict (rather than the
+// resource-in-use FK class). Pins the reason mapping wired up
+// in writeDomainError.
+func assertContainsTerminal(t *testing.T, body map[string]any) {
+	t.Helper()
+	envelope, ok := body["error"].(map[string]any)
+	require.True(t, ok)
+	msg, _ := envelope["message"].(string)
+	assert.Contains(t, msg, "terminal", "expected terminal-state 409 message, got %q", msg)
 }
 
 // TestGetDNSChangeIsScopedByZone pins the (project, zone, id)
