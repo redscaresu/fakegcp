@@ -120,6 +120,15 @@ func (app *Application) UpdateSubscription(w http.ResponseWriter, r *http.Reques
 	// PubSub v1 Patch wraps the resource in a `subscription` field
 	// alongside an `updateMask`. Tools that hit the API directly may
 	// instead post a flat patch body — accept either shape.
+	//
+	// fakegcp does NOT honour updateMask: every field present in
+	// the inner subscription object is applied (with a per-field
+	// skip-list for immutable values like topic). This is a known
+	// fidelity gap with real Pub/Sub, where fields outside the
+	// mask are ignored even if present in the body. The skip-list
+	// + per-field handler validation in UpdateSubscription is what
+	// keeps this from causing observable drift on the supported
+	// scenarios.
 	patch := body
 	if nested, ok := body["subscription"].(map[string]any); ok {
 		patch = nested

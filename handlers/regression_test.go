@@ -451,6 +451,44 @@ func TestGetDNSChangeIsScopedByZone(t *testing.T) {
 		"a different zone must not be able to look up zone-a's change id")
 }
 
+// TestPubSubTopicDeleteOrphansSubscriptionTombstone pins the
+// real-Pub/Sub orphan contract: deleting a topic leaves the
+// surviving subscriptions in place, but their `topic` field is
+// rewritten to "_deleted-topic_" (and topic_name is cleared
+// internally) so a topic recreated with the same name does NOT
+// silently re-bind the old subscriptions.
+func TestPubSubTopicDeleteOrphansSubscriptionTombstone(t *testing.T) {
+	srv, cleanup := testutil.NewTestServer(t)
+	defer cleanup()
+
+	pubsubBase := testutil.IAMPath(project)
+
+	resp, _ := testutil.DoPut(t, srv, pubsubBase+"/topics/orig", map[string]any{})
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	resp, _ = testutil.DoPut(t, srv, pubsubBase+"/subscriptions/sub", map[string]any{
+		"topic": "projects/" + project + "/topics/orig",
+	})
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	resp, _ = testutil.DoDelete(t, srv, pubsubBase+"/topics/orig")
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	resp, body := testutil.DoGet(t, srv, pubsubBase+"/subscriptions/sub")
+	require.Equal(t, http.StatusOK, resp.StatusCode, "subscription must survive topic delete")
+	assert.Equal(t, "_deleted-topic_", body["topic"],
+		"topic field must flip to _deleted-topic_ tombstone, real Pub/Sub semantics")
+
+	// Recreate the topic with the same name. The orphaned
+	// subscription must NOT silently re-bind to the new topic.
+	resp, _ = testutil.DoPut(t, srv, pubsubBase+"/topics/orig", map[string]any{})
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	resp, body = testutil.DoGet(t, srv, pubsubBase+"/subscriptions/sub")
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, "_deleted-topic_", body["topic"],
+		"orphaned subscription must remain bound to the tombstone, not the recreated topic")
+}
+
 // TestPubSubSubscriptionTopicIsImmutable pins the contract that
 // PATCH on a pubsub subscription must not retarget the parent
 // topic. A pre-fix bug let a patched `topic` self-link land in

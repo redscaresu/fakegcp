@@ -2481,6 +2481,32 @@ func (r *Repository) ListTopics(project string) ([]map[string]any, error) {
 }
 
 func (r *Repository) DeleteTopic(project, name string) error {
+	// Real Pub/Sub flips the `topic` field of every surviving
+	// subscription to "_deleted-topic_" when a topic is deleted, so
+	// a later subscription read can tell the topic is gone (and a
+	// recreated topic with the same name is NOT silently rebound).
+	// We mirror that here: subscriptions stay (no FK cascade), but
+	// their topic field is rewritten and topic_name is cleared so
+	// the recreate-collision can't re-bind them.
+	subs, err := r.loadMany(`SELECT data FROM pubsub_subscriptions WHERE project = ? AND topic_name = ?`, project, name)
+	if err != nil {
+		return err
+	}
+	for _, sub := range subs {
+		sub["topic"] = "_deleted-topic_"
+		raw, err := marshalData(sub)
+		if err != nil {
+			return err
+		}
+		subName := getString(sub, "name")
+		shortSubName := extractNameFromSelfLink(subName)
+		if shortSubName == "" {
+			shortSubName = subName
+		}
+		if _, err := r.db.Exec(`UPDATE pubsub_subscriptions SET topic_name = '_deleted-topic_', data = ? WHERE project = ? AND name = ?`, string(raw), project, shortSubName); err != nil {
+			return mapInsertError(err)
+		}
+	}
 	return r.deleteWithResult(`DELETE FROM pubsub_topics WHERE project = ? AND name = ?`, project, name)
 }
 
