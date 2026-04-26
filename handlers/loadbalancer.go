@@ -44,12 +44,14 @@ func (app *Application) validateScalarFK(w http.ResponseWriter, body map[string]
 }
 
 // validateForwardingRuleIPAddress validates the global forwarding
-// rule's IPAddress field. The Compute API accepts three shapes:
-//   - a literal IPv4/IPv6 string ("34.1.2.3", "2600:1900::1") — let through.
-//   - a bare resource name ("lb-ip") — look up against globalAddresses.
-//   - a self-link or relative path — same FK lookup, with shape validation.
-// Anything else (a string that's neither a parseable IP nor a valid
-// path nor a known address name) is rejected as malformed.
+// rule's IPAddress field. The Compute API accepts four surface
+// shapes:
+//   - a literal IPv4/IPv6 string ("34.1.2.3", "2001:db8::1") — let through.
+//   - a bare reserved-address name ("lb-ip") — look up against globalAddresses.
+//   - a same-project relative path ("projects/<p>/global/addresses/<n>").
+//   - an absolute self-link ("https://www.googleapis.com/compute/v1/...").
+// Anything else (not a parseable IP, not a recognisable resource
+// path, not a known address name) is rejected as malformed.
 func (app *Application) validateForwardingRuleIPAddress(w http.ResponseWriter, body map[string]any, project string) bool {
 	ref, _ := body["IPAddress"].(string)
 	if ref == "" {
@@ -75,12 +77,12 @@ func (app *Application) validateForwardingRuleIPAddress(w http.ResponseWriter, b
 	return true
 }
 
-// validateForwardingRuleTarget validates the global forwarding rule's
-// `target`. Unlike most LB FKs, the target can point at one of
-// several collections (targetHttpProxies, targetHttpsProxies — in
-// principle others, but those are what fakegcp models today). We
-// inspect the reference, dispatch to the matching getter, and
-// reject anything that doesn't fit the supported set.
+// validateForwardingRuleTarget validates the global forwarding
+// rule's `target`. The real Compute API accepts several proxy
+// collections (targetHttpProxies, targetHttpsProxies,
+// targetTcpProxies, ...), but fakegcp only models targetHttpsProxies
+// today. References to any other project, or to any other
+// collection, are rejected with a 400.
 func (app *Application) validateForwardingRuleTarget(w http.ResponseWriter, body map[string]any, project string) bool {
 	ref, _ := body["target"].(string)
 	if ref == "" {
@@ -697,11 +699,10 @@ func (app *Application) CreateGlobalForwardingRule(w http.ResponseWriter, r *htt
 	if _, ok := body["loadBalancingScheme"]; !ok {
 		body["loadBalancingScheme"] = "EXTERNAL"
 	}
-	// `target` may be any of several proxy collections (targetHttpProxies,
-	// targetHttpsProxies, targetTcpProxies, ...). Resolve and validate
-	// against whichever collection the reference declares; rejecting
-	// the request when the collection isn't a known target type, or
-	// when the target itself doesn't exist in this project.
+	// `target` is FK-validated against same-project targetHttpsProxies.
+	// fakegcp doesn't model the other proxy collections (targetHttp,
+	// targetTcp, ...) yet; references to those — and to any other
+	// project — are rejected with a 400.
 	if !app.validateForwardingRuleTarget(w, body, project) {
 		return
 	}
