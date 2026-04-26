@@ -35,14 +35,15 @@ fakegcp runs as a single Go binary, tracks resource state in SQLite, and exposes
         |    /healthChecks   |          |
         |    /addresses      |          |
         |    /globalAddresses|          |
-        |  /container/v1/... |          |
-        |    /clusters       |          |
-        |    /nodePools      |          |
+        |  /v1/projects/{p}/ |          |
+        |    locations/{l}/  |          |
+        |      /clusters     |          |
+        |      /nodePools    |          |
         |  /sql/v1beta4/...  |          |
         |    /instances      |          |
         |    /databases      |          |
         |    /users          |          |
-        |  /v1/projects/...  |          |
+        |  /v1/projects/{p}/ |          |
         |    /serviceAccounts|          |
         |    /secrets        |          |
         |    /topics         |          |
@@ -51,7 +52,6 @@ fakegcp runs as a single Go binary, tracks resource state in SQLite, and exposes
         |  /dns/v1/...       |          |
         |  /v2/projects/...  |          |
         |    /services       |          |
-        |  /sql/v1beta4/...  |          |
         +---------+----------+          |
                   |                     |
                   v                     v
@@ -73,7 +73,7 @@ fakegcp runs as a single Go binary, tracks resource state in SQLite, and exposes
 
 ## Consumer
 
-[`infrafactory`](https://github.com/redscaresu/infrafactory) drives fakegcp as the Layer-2 mock-deploy backend for `cloud: gcp` scenarios. The cross-repo e2e helpers in `internal/e2e/helpers.go` build fakegcp from this source tree on a free port for every gated GCP e2e test (`TestE2E_GCP*`), and the topology derivation in `internal/harness/topology_derive_gcp.go` reads `/mock/state` to evaluate connectivity, http_probe, and policy criteria. The seven services covered by working+misconfigured+updates examples here (Pub/Sub, DNS, Cloud Run, Secret Manager, Compute LB, IAM, Storage) are also driven through infrafactory's gated GCP e2e tests when run with `INFRAFACTORY_ENABLE_E2E=1`. Other resource shapes (e.g. `compute.instances`, `sql.instances`, `container.clusters`) are exercised in narrower paths — see infrafactory's BACKLOG for the full coverage matrix.
+[`infrafactory`](https://github.com/redscaresu/infrafactory) drives fakegcp as the Layer-2 mock-deploy backend for `cloud: gcp` scenarios. The cross-repo e2e helpers in `internal/e2e/helpers.go` build fakegcp from this source tree on a free port for every gated GCP e2e test (`TestE2E_GCP*`), and the topology derivation in `internal/harness/topology_derive_gcp.go` reads `/mock/state` to evaluate connectivity, http_probe, and policy criteria. The seven services with `examples/working/` + `examples/updates/` coverage (Pub/Sub, DNS, Cloud Run, Secret Manager, Compute LB, IAM, Storage) are driven through infrafactory's gated GCP e2e tests when run with `INFRAFACTORY_ENABLE_E2E=1`; the FK-violation paths are pinned by the subset of those services that have `examples/misconfigured/` entries (Pub/Sub, DNS, Secret Manager, Compute LB, plus the Compute instance / network FK). Other resource shapes (e.g. `compute.instances`, `sql.instances`, `container.clusters`) are exercised by handler unit tests in `handlers_test.go` rather than end-to-end tofu drives.
 
 ## Install / Run
 
