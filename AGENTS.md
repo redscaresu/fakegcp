@@ -36,12 +36,16 @@ GCP mutations return an Operation object. The provider polls until `status: "DON
 The Google provider requires each service endpoint to be set individually:
 ```hcl
 provider "google" {
-  compute_custom_endpoint         = "http://localhost:8080/compute/v1/"
-  container_custom_endpoint       = "http://localhost:8080/"
-  sql_custom_endpoint             = "http://localhost:8080/sql/v1beta4/"
-  iam_custom_endpoint             = "http://localhost:8080/"
-  storage_custom_endpoint         = "http://localhost:8080/storage/v1/"
-  cloud_resource_manager_custom_endpoint = "http://localhost:8080/"
+  compute_custom_endpoint                = "http://localhost:8080/compute/v1/"
+  container_custom_endpoint              = "http://localhost:8080/"
+  cloud_sql_custom_endpoint              = "http://localhost:8080/sql/v1beta4/"
+  iam_custom_endpoint                    = "http://localhost:8080/v1/"
+  storage_custom_endpoint                = "http://localhost:8080/storage/v1/"
+  cloud_resource_manager_custom_endpoint = "http://localhost:8080/v1/"
+  pubsub_custom_endpoint                 = "http://localhost:8080/v1/"
+  dns_custom_endpoint                    = "http://localhost:8080/dns/v1/"
+  cloud_run_v2_custom_endpoint           = "http://localhost:8080/v2/"
+  secret_manager_custom_endpoint         = "http://localhost:8080/v1/"
 }
 ```
 

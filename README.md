@@ -94,7 +94,7 @@ provider "google" {
   cloud_resource_manager_custom_endpoint = "http://localhost:8080/v1/"
   iam_custom_endpoint                    = "http://localhost:8080/v1/"
   storage_custom_endpoint                = "http://localhost:8080/storage/v1/"
-  sql_custom_endpoint                    = "http://localhost:8080/sql/v1beta4/"
+  cloud_sql_custom_endpoint              = "http://localhost:8080/sql/v1beta4/"
   pubsub_custom_endpoint                 = "http://localhost:8080/v1/"
   dns_custom_endpoint                    = "http://localhost:8080/dns/v1/"
   cloud_run_v2_custom_endpoint           = "http://localhost:8080/v2/"
