@@ -42,16 +42,16 @@ fakegcp runs as a single Go binary, tracks resource state in SQLite, and exposes
         |    /instances      |          |
         |    /databases      |          |
         |    /users          |          |
-        |  /iam/v1/...       |          |
+        |  /v1/projects/...  |          |
         |    /serviceAccounts|          |
-        |    /policies       |          |
-        |    /sa-keys        |          |
-        |  /storage/v1/...   |          |
-        |    /buckets        |          |
-        |  /pubsub/v1/...    |          |
+        |    /secrets        |          |
+        |    /topics         |          |
+        |    /subscriptions  |          |
+        |  /storage/v1/b/... |          |
         |  /dns/v1/...       |          |
-        |  /run/v2/...       |          |
-        |  /secretmanager... |          |
+        |  /v2/projects/...  |          |
+        |    /services       |          |
+        |  /sql/v1beta4/...  |          |
         +---------+----------+          |
                   |                     |
                   v                     v
@@ -84,23 +84,25 @@ go build -o fakegcp ./cmd/fakegcp
 
 In-memory SQLite by default; pass `--db ./fakegcp.db` for state across restarts.
 
-Point Terraform at it via the per-service `*_custom_endpoint` overrides:
+Point Terraform at it via the per-service `*_custom_endpoint` overrides. The path you append to `localhost:8080` must match where fakegcp registers each service in `handlers/handlers.go` (`/v1/projects/...` for IAM, Pub/Sub, Secret Manager and Cloud Resource Manager; `/v2/...` for Cloud Run; service-prefixed paths for Compute, DNS, Cloud SQL, Storage):
 
 ```hcl
 provider "google" {
-  project                       = "test-project"
-  compute_custom_endpoint       = "http://localhost:8080/compute/v1/"
-  container_custom_endpoint     = "http://localhost:8080/container/v1/"
-  cloud_resource_manager_custom_endpoint = "http://localhost:8080/cloudresourcemanager/v1/"
-  iam_custom_endpoint           = "http://localhost:8080/iam/v1/"
-  storage_custom_endpoint       = "http://localhost:8080/storage/v1/"
-  sql_custom_endpoint           = "http://localhost:8080/sql/v1beta4/"
-  pubsub_custom_endpoint        = "http://localhost:8080/pubsub/v1/"
-  dns_custom_endpoint           = "http://localhost:8080/dns/v1/"
-  cloud_run_custom_endpoint     = "http://localhost:8080/run/v2/"
-  secret_manager_custom_endpoint = "http://localhost:8080/secretmanager/v1/"
+  project                                = "test-project"
+  compute_custom_endpoint                = "http://localhost:8080/compute/v1/"
+  container_custom_endpoint              = "http://localhost:8080/"
+  cloud_resource_manager_custom_endpoint = "http://localhost:8080/v1/"
+  iam_custom_endpoint                    = "http://localhost:8080/v1/"
+  storage_custom_endpoint                = "http://localhost:8080/storage/v1/"
+  sql_custom_endpoint                    = "http://localhost:8080/sql/v1beta4/"
+  pubsub_custom_endpoint                 = "http://localhost:8080/v1/"
+  dns_custom_endpoint                    = "http://localhost:8080/dns/v1/"
+  cloud_run_v2_custom_endpoint           = "http://localhost:8080/v2/"
+  secret_manager_custom_endpoint         = "http://localhost:8080/v1/"
 }
 ```
+
+Each `examples/working/<service>` directory has a `providers.tf` set up with just the endpoint(s) that example uses — copy from there if in doubt.
 
 `Authorization: Bearer <anything>` is accepted on all GCP routes; admin routes are unauthenticated.
 
@@ -164,15 +166,15 @@ Three columns: **Handler** = HTTP routes wired, **Tests** = `handlers_test.go` c
 | Service | Handler | Tests | Terraform example | Notes |
 |---|---|---|---|---|
 | Compute (instances, networks, subnetworks, firewalls, disks, addresses) | ✅ | ✅ | [`examples/working/basic_instance`](examples/working/basic_instance) | self-link rewrite on Create |
-| Compute LB stack (forwarding rules, backend services, health checks, URL maps, target HTTPS proxies, SSL certs) | ✅ | ✅ | — | global only; example pending |
+| Compute LB stack (forwarding rules, backend services, health checks, URL maps, target HTTPS proxies, SSL certs) | ✅ | ✅ FK chain | [`examples/working/load_balancer`](examples/working/load_balancer) | health-check, urlMap, sslCertificates, target, IPAddress all FK-validated on Create + Update |
 | Container / GKE (clusters, node pools) | ✅ | ✅ | [`examples/working/gke_cluster`](examples/working/gke_cluster) | cluster delete cascades to pools |
 | Cloud SQL (instances, databases, users) | ✅ | ✅ | [`examples/working/cloud_sql`](examples/working/cloud_sql) | private + public IP configurations |
-| IAM (service accounts, policies, sa-keys, bindings) | ✅ | ✅ | — | fully-qualified `serviceAccount:` principals |
-| Storage (buckets) | ✅ | ✅ | — | uniform bucket-level access, encryption |
-| Pub/Sub (topics, subscriptions) | ✅ | ✅ FK + cascade | — | TestPubSubTopicCRUD, TestPubSubSubscriptionFKViolation, TestPubSubTopicDeleteWithSubscriptions |
-| DNS (managed zones, record sets) | ✅ | ✅ FK + cascade | — | TestDNSZoneCRUD, TestDNSRecordSetCRUD, TestDNSRecordSetFKViolation, TestDNSZoneDeleteWithRecords |
-| Cloud Run (services) | ✅ | ✅ CRUD | — | TestCloudRunServiceCRUD |
-| Secret Manager (secrets, versions) | ✅ | ✅ FK + cascade | — | TestSecretCRUD, TestSecretVersionCRUD, TestSecretDeleteWithVersions |
+| IAM (service accounts, policies, sa-keys, bindings) | ✅ | ✅ | [`examples/working/iam`](examples/working/iam) | fully-qualified `serviceAccount:` principals |
+| Storage (buckets) | ✅ | ✅ | [`examples/working/storage`](examples/working/storage) | uniform bucket-level access, encryption |
+| Pub/Sub (topics, subscriptions) | ✅ | ✅ FK + cascade | [`examples/working/pubsub`](examples/working/pubsub) | TestPubSubTopicCRUD, TestPubSubSubscriptionFKViolation, TestPubSubTopicDeleteWithSubscriptions |
+| DNS (managed zones, record sets) | ✅ | ✅ FK + cascade | [`examples/working/dns`](examples/working/dns) | mutations via the v1 transactional changes API |
+| Cloud Run (services) | ✅ | ✅ CRUD | [`examples/working/cloud_run`](examples/working/cloud_run) | TestCloudRunServiceCRUD |
+| Secret Manager (secrets, versions) | ✅ | ✅ FK + cascade | [`examples/working/secret_manager`](examples/working/secret_manager) | TestSecretCRUD, TestSecretVersionCRUD, TestSecretDeleteWithVersions |
 | Operations | ✅ | ✅ | n/a | always-DONE shim used by every mutation |
 
-**Caveat on the bottom four**: handler + handler-test coverage means the route accepts/persists/returns the GCP wire shape correctly *as observed by the test*, but the wire shape hasn't been pinned against the live `hashicorp/google` Terraform provider. A drift could exist between what the provider sends/expects and what fakegcp accepts/returns that an HCL example would surface. Adding a `examples/working/<service>` directory with a proven `apply → plan (no-op) → destroy` cycle is the path from this row to fully verified.
+Each entry has been driven through `tofu apply → mutate → tofu apply → tofu destroy` against the live `hashicorp/google` Terraform provider. The companion `examples/misconfigured/` and `examples/updates/` directories pin FK-violation and update-path coverage for the matching service. See [`examples/README.md`](examples/README.md) for the full lifecycle.
