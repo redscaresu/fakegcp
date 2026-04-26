@@ -314,6 +314,103 @@ func mustCreate(t *testing.T, srv *httptest.Server, path string, body map[string
 	require.Equal(t, http.StatusOK, resp.StatusCode, "setup create failed: POST %s", path)
 }
 
+// TestSecretVersionDestroyPreservesRow pins the v1 :destroy contract:
+// the version row stays in the table with state=DESTROYED and a
+// destroyTime, the payload is cleared, and a subsequent GET still
+// returns the version. Hard-deleting it would diverge from the real
+// Secret Manager API.
+func TestSecretVersionDestroyPreservesRow(t *testing.T) {
+	srv, cleanup := testutil.NewTestServer(t)
+	defer cleanup()
+
+	mustCreate(t, srv, testutil.IAMPath(project, "secrets"), map[string]any{
+		"secretId":    "destroy-me",
+		"replication": map[string]any{"automatic": map[string]any{}},
+	})
+	mustCreate(t, srv, testutil.IAMPath(project, "secrets", "destroy-me:addVersion"), map[string]any{
+		"payload": map[string]any{"data": "aGVsbG8="},
+	})
+
+	resp, _ := testutil.DoCreate(t, srv, testutil.IAMPath(project, "secrets", "destroy-me", "versions", "1:destroy"), map[string]any{})
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	resp, body := testutil.DoGet(t, srv, testutil.IAMPath(project, "secrets", "destroy-me", "versions", "1"))
+	require.Equal(t, http.StatusOK, resp.StatusCode,
+		"destroyed version must still be GETtable, real Secret Manager keeps the row")
+	assert.Equal(t, "DESTROYED", body["state"])
+	assert.NotEmpty(t, body["destroyTime"])
+	_, hasPayload := body["payload"]
+	assert.False(t, hasPayload, "destroyed version must not retain its payload")
+}
+
+// TestGetDNSChangeIsScopedByZone pins the (project, zone, id)
+// keying for cached DNS changes. A poll against managed-zone B
+// against a change created in zone A must 404, not silently
+// resolve to A's change.
+func TestGetDNSChangeIsScopedByZone(t *testing.T) {
+	srv, cleanup := testutil.NewTestServer(t)
+	defer cleanup()
+
+	dnsZonePath := "/dns/v1/projects/" + project + "/managedZones"
+	mustCreate(t, srv, dnsZonePath, map[string]any{
+		"name":       "zone-a",
+		"dnsName":    "a.invalid.",
+		"visibility": "public",
+	})
+	mustCreate(t, srv, dnsZonePath, map[string]any{
+		"name":       "zone-b",
+		"dnsName":    "b.invalid.",
+		"visibility": "public",
+	})
+
+	resp, body := testutil.DoCreate(t, srv, dnsZonePath+"/zone-a/changes", map[string]any{
+		"additions": []any{
+			map[string]any{"name": "host.a.invalid.", "type": "A", "ttl": 300, "rrdatas": []any{"192.0.2.10"}},
+		},
+	})
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	id, _ := body["id"].(string)
+	require.NotEmpty(t, id)
+
+	resp, _ = testutil.DoGet(t, srv, dnsZonePath+"/zone-a/changes/"+id)
+	assert.Equal(t, http.StatusOK, resp.StatusCode, "owning zone must still resolve")
+
+	resp, _ = testutil.DoGet(t, srv, dnsZonePath+"/zone-b/changes/"+id)
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode,
+		"a different zone must not be able to look up zone-a's change id")
+}
+
+// TestResetClearsDNSChangeCache pins that /mock/reset wipes the
+// in-memory DNS change history alongside the repo. Without this,
+// a stale change id from before the reset would still resolve and
+// diverge from the cleared rrset state.
+func TestResetClearsDNSChangeCache(t *testing.T) {
+	srv, cleanup := testutil.NewTestServer(t)
+	defer cleanup()
+
+	dnsZonePath := "/dns/v1/projects/" + project + "/managedZones"
+	mustCreate(t, srv, dnsZonePath, map[string]any{
+		"name":       "reset-zone",
+		"dnsName":    "r.invalid.",
+		"visibility": "public",
+	})
+	resp, body := testutil.DoCreate(t, srv, dnsZonePath+"/reset-zone/changes", map[string]any{
+		"additions": []any{
+			map[string]any{"name": "host.r.invalid.", "type": "A", "ttl": 300, "rrdatas": []any{"192.0.2.10"}},
+		},
+	})
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	id, _ := body["id"].(string)
+	require.NotEmpty(t, id)
+
+	resetResp, _ := testutil.DoCreate(t, srv, "/mock/reset", nil)
+	require.Equal(t, http.StatusOK, resetResp.StatusCode)
+
+	resp, _ = testutil.DoGet(t, srv, dnsZonePath+"/reset-zone/changes/"+id)
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode,
+		"reset must clear the DNS change cache")
+}
+
 // TestDNSChangeRollbackOrder pins the rollback order for the
 // (delete A, add replacement A, fail mid-additions) interleaving.
 // Earlier code rolled back deletions before additions, so the

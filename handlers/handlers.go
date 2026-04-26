@@ -18,8 +18,16 @@ import (
 type Application struct {
 	repo *repository.Repository
 
-	dnsChangesMu sync.RWMutex
-	dnsChanges   map[string]map[string]any
+	dnsChangesMu       sync.RWMutex
+	dnsChanges         map[string]map[string]any
+	dnsChangesSnapshot map[string]map[string]any
+}
+
+// dnsChangeKey scopes a cached DNS change record by the
+// (project, zone, id) tuple it was created under, matching the
+// real Cloud DNS API contract.
+func dnsChangeKey(project, zone, id string) string {
+	return project + "/" + zone + "/" + id
 }
 
 func NewApplication(repo *repository.Repository) *Application {
@@ -29,23 +37,60 @@ func NewApplication(repo *repository.Repository) *Application {
 	}
 }
 
-// recordDNSChange caches a change record by id so GetDNSChange can
-// return it later. Cloud DNS retains change history per zone forever
-// in production; the in-memory cache here is good enough for tests.
-func (app *Application) recordDNSChange(change map[string]any) {
+// recordDNSChange caches a change record by (project, zone, id) so
+// GetDNSChange can return it later. Cloud DNS retains change history
+// per zone forever in production; the in-memory cache here is good
+// enough for tests.
+func (app *Application) recordDNSChange(project, zone string, change map[string]any) {
 	id, _ := change["id"].(string)
 	if id == "" {
 		return
 	}
 	app.dnsChangesMu.Lock()
 	defer app.dnsChangesMu.Unlock()
-	app.dnsChanges[id] = change
+	app.dnsChanges[dnsChangeKey(project, zone, id)] = change
 }
 
-func (app *Application) lookupDNSChange(id string) map[string]any {
+func (app *Application) lookupDNSChange(project, zone, id string) map[string]any {
 	app.dnsChangesMu.RLock()
 	defer app.dnsChangesMu.RUnlock()
-	return app.dnsChanges[id]
+	return app.dnsChanges[dnsChangeKey(project, zone, id)]
+}
+
+// resetDNSChanges clears the cached change history. Called from
+// the /mock/reset admin path so a reset wipes both the SQLite
+// repo and the in-memory change cache; otherwise stale change ids
+// from before the reset would still resolve.
+func (app *Application) resetDNSChanges() {
+	app.dnsChangesMu.Lock()
+	defer app.dnsChangesMu.Unlock()
+	app.dnsChanges = map[string]map[string]any{}
+}
+
+// snapshotDNSChanges captures the current cache so a later
+// restoreDNSChanges can roll it back. Mirrors the repo's
+// VACUUM-INTO snapshot/restore pair.
+func (app *Application) snapshotDNSChanges() {
+	app.dnsChangesMu.Lock()
+	defer app.dnsChangesMu.Unlock()
+	snap := make(map[string]map[string]any, len(app.dnsChanges))
+	for k, v := range app.dnsChanges {
+		snap[k] = v
+	}
+	app.dnsChangesSnapshot = snap
+}
+
+func (app *Application) restoreDNSChanges() {
+	app.dnsChangesMu.Lock()
+	defer app.dnsChangesMu.Unlock()
+	if app.dnsChangesSnapshot == nil {
+		return
+	}
+	restored := make(map[string]map[string]any, len(app.dnsChangesSnapshot))
+	for k, v := range app.dnsChangesSnapshot {
+		restored[k] = v
+	}
+	app.dnsChanges = restored
 }
 
 func decodeBody(r *http.Request) (map[string]any, error) {

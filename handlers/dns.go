@@ -282,18 +282,20 @@ func (app *Application) CreateDNSChange(w http.ResponseWriter, r *http.Request) 
 	if len(deletions) > 0 {
 		change["deletions"] = deletions
 	}
-	app.recordDNSChange(change)
+	app.recordDNSChange(project, zone, change)
 	writeJSON(w, http.StatusOK, change)
 }
 
 // GetDNSChange returns the change record CreateDNSChange persisted.
 // fakegcp applies changes synchronously, so the cached record is
-// always status=done. Returning a 404 for an unknown change id (rather
-// than blindly fabricating a done record) catches malformed polling
-// against the test mock the same way Cloud DNS would.
+// always status=done. Lookups are scoped to (project, zone, id) — a
+// poll against managed-zone B against a change created in zone A
+// must 404, matching the real Cloud DNS API.
 func (app *Application) GetDNSChange(w http.ResponseWriter, r *http.Request) {
+	project := chi.URLParam(r, "project")
+	zone := chi.URLParam(r, "zone")
 	id := chi.URLParam(r, "change")
-	if change := app.lookupDNSChange(id); change != nil {
+	if change := app.lookupDNSChange(project, zone, id); change != nil {
 		writeJSON(w, http.StatusOK, change)
 		return
 	}

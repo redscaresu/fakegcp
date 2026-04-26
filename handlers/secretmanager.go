@@ -158,17 +158,24 @@ func (app *Application) GetSecretVersion(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, item)
 }
 
+// DestroySecretVersion implements the v1 :destroy verb. Per Secret
+// Manager semantics, the version is *not* deleted — it transitions
+// to state=DESTROYED, the payload is cleared, and a destroyTime is
+// recorded. Subsequent GETs still return the version with the new
+// state. Hard-deleting it would diverge from the real API and break
+// any caller that expects to see DESTROYED versions in list/get.
 func (app *Application) DestroySecretVersion(w http.ResponseWriter, r *http.Request) {
 	project := chi.URLParam(r, "project")
 	secret := chi.URLParam(r, "secret")
 	version := chi.URLParam(r, "version")
 
 	name := fmt.Sprintf("projects/%s/secrets/%s/versions/%s", project, secret, version)
-	if err := app.repo.DeleteSecretVersion(name); err != nil {
+	updated, err := app.repo.DestroySecretVersion(name)
+	if err != nil {
 		writeDomainError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{})
+	writeJSON(w, http.StatusOK, updated)
 }
 
 // EnableSecretVersion + DisableSecretVersion implement the v1

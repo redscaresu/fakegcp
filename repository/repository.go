@@ -2407,6 +2407,28 @@ func (r *Repository) SetSecretVersionState(name, state string) (map[string]any, 
 	return current, nil
 }
 
+// DestroySecretVersion implements the v1 :destroy verb. The version
+// row stays in the table — only state, destroyTime, and the cleared
+// payload are updated. This preserves the GET/list contract that
+// real Secret Manager exposes for destroyed versions.
+func (r *Repository) DestroySecretVersion(name string) (map[string]any, error) {
+	current, err := r.GetSecretVersion(name)
+	if err != nil {
+		return nil, err
+	}
+	current["state"] = "DESTROYED"
+	current["destroyTime"] = nowRFC3339()
+	delete(current, "payload")
+	raw, err := marshalData(current)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := r.db.Exec(`UPDATE secretmanager_versions SET data = ? WHERE name = ?`, string(raw), name); err != nil {
+		return nil, mapInsertError(err)
+	}
+	return current, nil
+}
+
 func (r *Repository) CreateTopic(project string, data map[string]any) (map[string]any, error) {
 	name := extractNameFromSelfLink(getString(data, "name"))
 	if name == "" {

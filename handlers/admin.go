@@ -11,6 +11,10 @@ func (app *Application) ResetState(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"status": "error", "error": err.Error()})
 		return
 	}
+	// Wipe in-memory caches that aren't backed by the SQLite repo
+	// (DNS change history). Without this, change ids from before the
+	// reset would still resolve and diverge from repo state.
+	app.resetDNSChanges()
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }
 
@@ -19,6 +23,7 @@ func (app *Application) SnapshotState(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"status": "error", "error": err.Error()})
 		return
 	}
+	app.snapshotDNSChanges()
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }
 
@@ -27,6 +32,7 @@ func (app *Application) RestoreState(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"status": "error", "error": err.Error()})
 		return
 	}
+	app.restoreDNSChanges()
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }
 
