@@ -451,6 +451,96 @@ func TestGetDNSChangeIsScopedByZone(t *testing.T) {
 		"a different zone must not be able to look up zone-a's change id")
 }
 
+// TestNetworkFKRejectsCrossProjectAndMismatch pins two cross-resource
+// FK rules added in pass 27:
+//   - resolveSameProjectName rejects any self-link that targets a
+//     different project even if the trailing name happens to exist
+//     locally.
+//   - validateInstanceNetworkInterfaces / validateClusterNetwork
+//     reject a subnet whose stored parent network doesn't match the
+//     requested network (real GCE/GKE rule).
+func TestNetworkFKRejectsCrossProjectAndMismatch(t *testing.T) {
+	srv, cleanup := testutil.NewTestServer(t)
+	defer cleanup()
+
+	mustCreate(t, srv, testutil.ComputePath(project, "global", "networks"), map[string]any{"name": "vpc-a"})
+	mustCreate(t, srv, testutil.ComputePath(project, "global", "networks"), map[string]any{"name": "vpc-b"})
+	mustCreate(t, srv, testutil.ComputePath(project, "regions", region, "subnetworks"), map[string]any{
+		"name":        "subnet-a",
+		"network":     "projects/" + project + "/global/networks/vpc-a",
+		"ipCidrRange": "10.0.0.0/24",
+	})
+
+	t.Run("compute instance cross-project network rejected", func(t *testing.T) {
+		resp, _ := testutil.DoCreate(t, srv, testutil.ComputePath(project, "zones", zone, "instances"), map[string]any{
+			"name":        "vm-xproject",
+			"machineType": "zones/" + zone + "/machineTypes/n1-standard-1",
+			"networkInterfaces": []any{
+				map[string]any{"network": "projects/other/global/networks/vpc-a"},
+			},
+		})
+		assert.Equal(t, http.StatusNotFound, resp.StatusCode,
+			"foreign-project network self-link must 404 even though vpc-a exists locally")
+	})
+
+	t.Run("compute instance VPC/subnet mismatch rejected", func(t *testing.T) {
+		resp, _ := testutil.DoCreate(t, srv, testutil.ComputePath(project, "zones", zone, "instances"), map[string]any{
+			"name":        "vm-mismatch",
+			"machineType": "zones/" + zone + "/machineTypes/n1-standard-1",
+			"networkInterfaces": []any{
+				map[string]any{
+					"network":    "projects/" + project + "/global/networks/vpc-b",
+					"subnetwork": "projects/" + project + "/regions/" + region + "/subnetworks/subnet-a",
+				},
+			},
+		})
+		assert.Equal(t, http.StatusNotFound, resp.StatusCode,
+			"subnet whose parent VPC is vpc-a must not be accepted under requested network vpc-b")
+	})
+
+	t.Run("GKE cluster cross-project network rejected", func(t *testing.T) {
+		resp, _ := testutil.DoCreate(t, srv, testutil.ContainerPath(project, location, "clusters"), map[string]any{
+			"cluster": map[string]any{
+				"name":    "cluster-xproject",
+				"network": "projects/other/global/networks/vpc-a",
+			},
+		})
+		assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+	})
+
+	t.Run("Cloud SQL cross-project privateNetwork rejected", func(t *testing.T) {
+		resp, _ := testutil.DoCreate(t, srv, testutil.SQLPath(project, "instances"), map[string]any{
+			"name":            "sql-xproject",
+			"databaseVersion": "POSTGRES_15",
+			"region":          region,
+			"settings": map[string]any{
+				"tier": "db-f1-micro",
+				"ipConfiguration": map[string]any{
+					"privateNetwork": "projects/other/global/networks/vpc-a",
+				},
+			},
+		})
+		assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+	})
+}
+
+// TestPubSubSubscriptionRejectsCrossProjectTopic pins the same
+// project-scoped FK contract on Pub/Sub subscription create.
+func TestPubSubSubscriptionRejectsCrossProjectTopic(t *testing.T) {
+	srv, cleanup := testutil.NewTestServer(t)
+	defer cleanup()
+
+	pubsubBase := testutil.IAMPath(project)
+	resp, _ := testutil.DoPut(t, srv, pubsubBase+"/topics/local", map[string]any{})
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	resp, _ = testutil.DoPut(t, srv, pubsubBase+"/subscriptions/cross", map[string]any{
+		"topic": "projects/other/topics/local",
+	})
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode,
+		"foreign-project topic self-link must 404 even though local topic exists")
+}
+
 // TestComputeInstanceRejectsMissingNetwork pins the FK validation
 // added on instance create: a networkInterfaces entry referencing
 // a nonexistent network or subnetwork must 404, not silently

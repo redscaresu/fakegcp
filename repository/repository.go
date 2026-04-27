@@ -747,8 +747,10 @@ func (r *Repository) CreateInstance(project, zone string, data map[string]any) (
 
 // validateInstanceNetworkInterfaces checks every networkInterfaces
 // entry's `network` and `subnetwork` references resolve to an
-// existing resource in this project. Returns ErrNotFound for the
-// first miss so the caller can map it to a 404.
+// existing resource in the request project, AND that the subnetwork's
+// parent network matches the network reference. Real GCE rejects
+// foreign-project self-links and mismatched VPC/subnet pairs;
+// fakegcp surfaces both as ErrNotFound so the 404 mapping fires.
 func (r *Repository) validateInstanceNetworkInterfaces(project string, data map[string]any) error {
 	nics, _ := data["networkInterfaces"].([]any)
 	for _, raw := range nics {
@@ -756,29 +758,81 @@ func (r *Repository) validateInstanceNetworkInterfaces(project string, data map[
 		if nic == nil {
 			continue
 		}
-		if ref := getString(nic, "network"); ref != "" {
-			netName := extractNameFromSelfLink(ref)
+		netRef := getString(nic, "network")
+		subRef := getString(nic, "subnetwork")
+
+		netName, err := resolveSameProjectName(project, netRef, "networks")
+		if err != nil {
+			return err
+		}
+		if netName != "" {
 			if _, err := r.GetNetwork(project, netName); err != nil {
 				return err
 			}
 		}
-		if ref := getString(nic, "subnetwork"); ref != "" {
-			subName := extractNameFromSelfLink(ref)
-			region := extractRegionFromSubnetSelfLink(ref)
-			if region != "" {
-				if _, err := r.GetSubnetwork(project, region, subName); err != nil {
-					return err
-				}
+		if subRef == "" {
+			continue
+		}
+		subName, err := resolveSameProjectName(project, subRef, "subnetworks")
+		if err != nil {
+			return err
+		}
+		region := extractRegionFromSubnetSelfLink(subRef)
+		if region == "" {
+			continue
+		}
+		sub, err := r.GetSubnetwork(project, region, subName)
+		if err != nil {
+			return err
+		}
+		if netName != "" {
+			if got := getString(sub, "network_name"); got != "" && got != netName {
+				return models.ErrNotFound
 			}
 		}
 	}
 	return nil
 }
 
+// resolveSameProjectName parses a self-link / relative path of the
+// form (projects/<p>/...)?/<collection>/<name>, rejects refs into a
+// different project with ErrNotFound, and returns just the resource
+// name. Bare names pass through unchanged.
+func resolveSameProjectName(project, ref, collection string) (string, error) {
+	if ref == "" {
+		return "", nil
+	}
+	if !strings.Contains(ref, "/") {
+		return ref, nil
+	}
+	// Strip protocol + host so absolute self-links become relative.
+	if i := strings.Index(ref, "://"); i >= 0 {
+		if j := strings.Index(ref[i+3:], "/"); j >= 0 {
+			ref = ref[i+3+j:]
+		}
+	}
+	ref = strings.TrimPrefix(ref, "/")
+	ref = strings.TrimPrefix(ref, "compute/v1/")
+	ref = strings.TrimPrefix(ref, "v1/")
+	parts := strings.Split(ref, "/")
+	if len(parts) >= 2 && parts[0] == "projects" {
+		if parts[1] != project {
+			return "", models.ErrNotFound
+		}
+		for i := 2; i+1 < len(parts); i++ {
+			if parts[i] == collection {
+				return parts[i+1], nil
+			}
+		}
+	}
+	return parts[len(parts)-1], nil
+}
+
 // validateSQLPrivateNetwork checks the optional
 // settings.ipConfiguration.privateNetwork reference resolves to
-// an existing VPC in this project. Real Cloud SQL rejects an
-// instance create whose private network self-link is dangling.
+// an existing VPC in the request project. Real Cloud SQL rejects
+// dangling self-links *and* cross-project references; both surface
+// here as ErrNotFound.
 func (r *Repository) validateSQLPrivateNetwork(project string, data map[string]any) error {
 	settings, _ := data["settings"].(map[string]any)
 	if settings == nil {
@@ -792,7 +846,10 @@ func (r *Repository) validateSQLPrivateNetwork(project string, data map[string]a
 	if ref == "" {
 		return nil
 	}
-	netName := extractNameFromSelfLink(ref)
+	netName, err := resolveSameProjectName(project, ref, "networks")
+	if err != nil {
+		return err
+	}
 	if _, err := r.GetNetwork(project, netName); err != nil {
 		return err
 	}
@@ -800,23 +857,42 @@ func (r *Repository) validateSQLPrivateNetwork(project string, data map[string]a
 }
 
 // validateClusterNetwork checks google_container_cluster's
-// `network` and `subnetwork` references resolve in this project.
-// Real GKE rejects a cluster whose VPC or subnet is missing; the
-// pre-fix path silently accepted dangling self-links.
+// `network` and `subnetwork` references resolve in the request
+// project AND that the subnetwork's parent network matches the
+// requested VPC. Real GKE rejects a cluster whose VPC or subnet
+// is missing or whose subnet doesn't belong to the requested VPC;
+// the pre-fix path silently accepted dangling/cross-project links.
 func (r *Repository) validateClusterNetwork(project string, data map[string]any) error {
-	if ref := getString(data, "network"); ref != "" {
-		netName := extractNameFromSelfLink(ref)
+	netRef := getString(data, "network")
+	subRef := getString(data, "subnetwork")
+
+	netName, err := resolveSameProjectName(project, netRef, "networks")
+	if err != nil {
+		return err
+	}
+	if netName != "" {
 		if _, err := r.GetNetwork(project, netName); err != nil {
 			return err
 		}
 	}
-	if ref := getString(data, "subnetwork"); ref != "" {
-		subName := extractNameFromSelfLink(ref)
-		region := extractRegionFromSubnetSelfLink(ref)
-		if region != "" {
-			if _, err := r.GetSubnetwork(project, region, subName); err != nil {
-				return err
-			}
+	if subRef == "" {
+		return nil
+	}
+	subName, err := resolveSameProjectName(project, subRef, "subnetworks")
+	if err != nil {
+		return err
+	}
+	region := extractRegionFromSubnetSelfLink(subRef)
+	if region == "" {
+		return nil
+	}
+	sub, err := r.GetSubnetwork(project, region, subName)
+	if err != nil {
+		return err
+	}
+	if netName != "" {
+		if got := getString(sub, "network_name"); got != "" && got != netName {
+			return models.ErrNotFound
 		}
 	}
 	return nil
@@ -2626,9 +2702,17 @@ func (r *Repository) CreateSubscription(project string, data map[string]any) (ma
 	if name == "" {
 		return nil, fmt.Errorf("name is required")
 	}
-	topicName := extractNameFromSelfLink(getString(data, "topic"))
-	if topicName == "" {
+	topicRef := getString(data, "topic")
+	if topicRef == "" {
 		return nil, fmt.Errorf("topic reference is required")
+	}
+	// resolveSameProjectName rejects cross-project topic refs with
+	// ErrNotFound — same outcome as a bare-name topic that doesn't
+	// exist in this project. The pre-fix code accepted
+	// "projects/other/topics/x" if "x" existed locally.
+	topicName, err := resolveSameProjectName(project, topicRef, "topics")
+	if err != nil {
+		return nil, err
 	}
 	// Validate topic exists (FK was removed so subscriptions survive topic deletion)
 	if _, err := r.GetTopic(project, topicName); err != nil {
