@@ -451,6 +451,61 @@ func TestGetDNSChangeIsScopedByZone(t *testing.T) {
 		"a different zone must not be able to look up zone-a's change id")
 }
 
+// TestComputeInstanceRejectsMissingNetwork pins the FK validation
+// added on instance create: a networkInterfaces entry referencing
+// a nonexistent network or subnetwork must 404, not silently
+// persist a dangling instance that real GCE would reject.
+func TestComputeInstanceRejectsMissingNetwork(t *testing.T) {
+	srv, cleanup := testutil.NewTestServer(t)
+	defer cleanup()
+
+	resp, _ := testutil.DoCreate(t, srv, testutil.ComputePath(project, "zones", zone, "instances"), map[string]any{
+		"name":        "bad-vm",
+		"machineType": "zones/" + zone + "/machineTypes/n1-standard-1",
+		"networkInterfaces": []any{
+			map[string]any{
+				"network": "projects/" + project + "/global/networks/missing-vpc",
+			},
+		},
+	})
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+}
+
+// TestGKEClusterRejectsMissingNetwork pins the same FK guard for
+// google_container_cluster's network/subnetwork.
+func TestGKEClusterRejectsMissingNetwork(t *testing.T) {
+	srv, cleanup := testutil.NewTestServer(t)
+	defer cleanup()
+
+	resp, _ := testutil.DoCreate(t, srv, testutil.ContainerPath(project, location, "clusters"), map[string]any{
+		"cluster": map[string]any{
+			"name":    "bad-cluster",
+			"network": "projects/" + project + "/global/networks/missing-vpc",
+		},
+	})
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+}
+
+// TestSQLInstanceRejectsMissingPrivateNetwork pins the FK guard
+// on Cloud SQL settings.ipConfiguration.privateNetwork.
+func TestSQLInstanceRejectsMissingPrivateNetwork(t *testing.T) {
+	srv, cleanup := testutil.NewTestServer(t)
+	defer cleanup()
+
+	resp, _ := testutil.DoCreate(t, srv, testutil.SQLPath(project, "instances"), map[string]any{
+		"name":            "bad-pg",
+		"databaseVersion": "POSTGRES_15",
+		"region":          region,
+		"settings": map[string]any{
+			"tier": "db-f1-micro",
+			"ipConfiguration": map[string]any{
+				"privateNetwork": "projects/" + project + "/global/networks/missing-vpc",
+			},
+		},
+	})
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+}
+
 // TestPubSubTopicDeleteOrphansSubscriptionTombstone pins the
 // real-Pub/Sub orphan contract: deleting a topic leaves the
 // surviving subscriptions in place, but their `topic` field is

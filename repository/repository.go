@@ -717,6 +717,13 @@ func (r *Repository) CreateInstance(project, zone string, data map[string]any) (
 	if name == "" {
 		return nil, fmt.Errorf("name is required")
 	}
+	// Real GCE rejects an instance whose networkInterfaces refer
+	// to a non-existent network or subnetwork. Mirror that here so
+	// fakegcp doesn't silently bless miswired Terraform that real
+	// GCE would reject at apply time.
+	if err := r.validateInstanceNetworkInterfaces(project, data); err != nil {
+		return nil, err
+	}
 	data["name"] = name
 	data["project"] = project
 	data["zone"] = zone
@@ -736,6 +743,97 @@ func (r *Repository) CreateInstance(project, zone string, data map[string]any) (
 		return nil, mapInsertError(err)
 	}
 	return r.GetInstance(project, zone, name)
+}
+
+// validateInstanceNetworkInterfaces checks every networkInterfaces
+// entry's `network` and `subnetwork` references resolve to an
+// existing resource in this project. Returns ErrNotFound for the
+// first miss so the caller can map it to a 404.
+func (r *Repository) validateInstanceNetworkInterfaces(project string, data map[string]any) error {
+	nics, _ := data["networkInterfaces"].([]any)
+	for _, raw := range nics {
+		nic, _ := raw.(map[string]any)
+		if nic == nil {
+			continue
+		}
+		if ref := getString(nic, "network"); ref != "" {
+			netName := extractNameFromSelfLink(ref)
+			if _, err := r.GetNetwork(project, netName); err != nil {
+				return err
+			}
+		}
+		if ref := getString(nic, "subnetwork"); ref != "" {
+			subName := extractNameFromSelfLink(ref)
+			region := extractRegionFromSubnetSelfLink(ref)
+			if region != "" {
+				if _, err := r.GetSubnetwork(project, region, subName); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// validateSQLPrivateNetwork checks the optional
+// settings.ipConfiguration.privateNetwork reference resolves to
+// an existing VPC in this project. Real Cloud SQL rejects an
+// instance create whose private network self-link is dangling.
+func (r *Repository) validateSQLPrivateNetwork(project string, data map[string]any) error {
+	settings, _ := data["settings"].(map[string]any)
+	if settings == nil {
+		return nil
+	}
+	ipCfg, _ := settings["ipConfiguration"].(map[string]any)
+	if ipCfg == nil {
+		return nil
+	}
+	ref := getString(ipCfg, "privateNetwork")
+	if ref == "" {
+		return nil
+	}
+	netName := extractNameFromSelfLink(ref)
+	if _, err := r.GetNetwork(project, netName); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateClusterNetwork checks google_container_cluster's
+// `network` and `subnetwork` references resolve in this project.
+// Real GKE rejects a cluster whose VPC or subnet is missing; the
+// pre-fix path silently accepted dangling self-links.
+func (r *Repository) validateClusterNetwork(project string, data map[string]any) error {
+	if ref := getString(data, "network"); ref != "" {
+		netName := extractNameFromSelfLink(ref)
+		if _, err := r.GetNetwork(project, netName); err != nil {
+			return err
+		}
+	}
+	if ref := getString(data, "subnetwork"); ref != "" {
+		subName := extractNameFromSelfLink(ref)
+		region := extractRegionFromSubnetSelfLink(ref)
+		if region != "" {
+			if _, err := r.GetSubnetwork(project, region, subName); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// extractRegionFromSubnetSelfLink picks the region segment out of a
+// subnetwork self-link/path of the form
+// .../regions/<region>/subnetworks/<name>. Returns "" if the input
+// doesn't follow that shape.
+func extractRegionFromSubnetSelfLink(s string) string {
+	parts := strings.Split(s, "/")
+	for i := 0; i+1 < len(parts); i++ {
+		if parts[i] == "regions" {
+			return parts[i+1]
+		}
+	}
+	return ""
 }
 
 func (r *Repository) GetInstance(project, zone, name string) (map[string]any, error) {
@@ -828,6 +926,9 @@ func (r *Repository) CreateCluster(project, location string, data map[string]any
 	if name == "" {
 		return nil, fmt.Errorf("name is required")
 	}
+	if err := r.validateClusterNetwork(project, data); err != nil {
+		return nil, err
+	}
 	data["name"] = name
 	data["project"] = project
 	data["location"] = location
@@ -859,6 +960,9 @@ func (r *Repository) ListClusters(project, location string) ([]map[string]any, e
 func (r *Repository) UpdateCluster(project, location, name string, patch map[string]any) (map[string]any, error) {
 	current, err := r.GetCluster(project, location, name)
 	if err != nil {
+		return nil, err
+	}
+	if err := r.validateClusterNetwork(project, patch); err != nil {
 		return nil, err
 	}
 	merged := patchMerge(current, patch, "name", "project", "location")
@@ -924,6 +1028,9 @@ func (r *Repository) CreateSQLInstance(project string, data map[string]any) (map
 	if name == "" {
 		return nil, fmt.Errorf("name is required")
 	}
+	if err := r.validateSQLPrivateNetwork(project, data); err != nil {
+		return nil, err
+	}
 	data["name"] = name
 	data["project"] = project
 	if getString(data, "id") == "" {
@@ -954,6 +1061,9 @@ func (r *Repository) ListSQLInstances(project string) ([]map[string]any, error) 
 func (r *Repository) UpdateSQLInstance(project, name string, patch map[string]any) (map[string]any, error) {
 	current, err := r.GetSQLInstance(project, name)
 	if err != nil {
+		return nil, err
+	}
+	if err := r.validateSQLPrivateNetwork(project, patch); err != nil {
 		return nil, err
 	}
 	merged := patchMerge(current, patch, "name", "project")
@@ -2486,8 +2596,9 @@ func (r *Repository) DeleteTopic(project, name string) error {
 	// a later subscription read can tell the topic is gone (and a
 	// recreated topic with the same name is NOT silently rebound).
 	// We mirror that here: subscriptions stay (no FK cascade), but
-	// their topic field is rewritten and topic_name is cleared so
-	// the recreate-collision can't re-bind them.
+	// their topic field AND topic_name are both rewritten to the
+	// "_deleted-topic_" sentinel so the recreate-collision can't
+	// re-bind them via either lookup path.
 	subs, err := r.loadMany(`SELECT data FROM pubsub_subscriptions WHERE project = ? AND topic_name = ?`, project, name)
 	if err != nil {
 		return err

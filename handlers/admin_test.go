@@ -191,6 +191,10 @@ func TestCreateSQLInstancePersistsPrivateNetwork(t *testing.T) {
 	srv, cleanup := testutil.NewTestServer(t)
 	defer cleanup()
 
+	mustCreate(t, srv, testutil.ComputePath(project, "global", "networks"), map[string]any{
+		"name": "main-vpc",
+	})
+
 	createPath := testutil.SQLPath(project, "instances")
 	privateNet := "projects/" + project + "/global/networks/main-vpc"
 	resp, body := testutil.DoCreate(t, srv, createPath, map[string]any{
@@ -219,10 +223,20 @@ func TestCreateSQLInstancePersistsPrivateNetwork(t *testing.T) {
 
 // TestCreateClusterPersistsSubnetwork pins the GKE cluster Network and
 // Subnetwork fields the GCP `vpc_required.rego` policy and topology
-// derivation depend on.
+// derivation depend on. The VPC + subnet are seeded first because
+// cluster create now FK-validates them.
 func TestCreateClusterPersistsSubnetwork(t *testing.T) {
 	srv, cleanup := testutil.NewTestServer(t)
 	defer cleanup()
+
+	mustCreate(t, srv, testutil.ComputePath(project, "global", "networks"), map[string]any{
+		"name": "main-vpc",
+	})
+	mustCreate(t, srv, testutil.ComputePath(project, "regions", region, "subnetworks"), map[string]any{
+		"name":        "main-subnet",
+		"network":     "projects/" + project + "/global/networks/main-vpc",
+		"ipCidrRange": "10.0.0.0/24",
+	})
 
 	createPath := testutil.ContainerPath(project, location, "clusters")
 	resp, body := testutil.DoCreate(t, srv, createPath, map[string]any{
