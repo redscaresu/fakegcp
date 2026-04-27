@@ -846,7 +846,17 @@ func resolveSameProjectName(project, ref, collection string) (string, error) {
 		// `addresses` path satisfying a `networks` FK).
 		return "", models.ErrNotFound
 	}
-	return parts[len(parts)-1], nil
+	// Relative same-project path (no `projects/<p>/...` prefix).
+	// Examples: "global/networks/vpc", "regions/us-central1/subnetworks/sub".
+	// Walk the segments and require the expected collection appear,
+	// so a wrong-collection relative path can't sneak through by
+	// trailing-name collision.
+	for i := 0; i+1 < len(parts); i++ {
+		if parts[i] == collection {
+			return parts[i+1], nil
+		}
+	}
+	return "", models.ErrNotFound
 }
 
 // validateSQLPrivateNetwork checks the optional

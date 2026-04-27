@@ -581,6 +581,21 @@ func TestNetworkFKRejectsWrongCollectionAndPostMergePatch(t *testing.T) {
 		assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 	})
 
+	t.Run("relative wrong-collection path also rejected", func(t *testing.T) {
+		// Same trap, but expressed as a relative path with no
+		// projects/<p>/... prefix. Pre-fix code fell through to
+		// parts[len-1] for relative refs and accepted this as
+		// "vpc-a" against the networks FK.
+		resp, _ := testutil.DoCreate(t, srv, testutil.ComputePath(project, "zones", zone, "instances"), map[string]any{
+			"name":        "vm-relative-wrong-collection",
+			"machineType": "zones/" + zone + "/machineTypes/n1-standard-1",
+			"networkInterfaces": []any{
+				map[string]any{"network": "global/addresses/vpc-a"},
+			},
+		})
+		assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+	})
+
 	t.Run("partial PATCH cannot smuggle in mismatched subnet", func(t *testing.T) {
 		// Seed a valid cluster bound to vpc-a + subnet-a.
 		mustCreate(t, srv, testutil.ContainerPath(project, location, "clusters"), map[string]any{
