@@ -851,16 +851,37 @@ func (r *Repository) validateInstanceNetworkInterfaces(project, instanceZone str
 }
 
 // regionFromZone strips the trailing "-<zone-letter>" off a GCP
-// zone string ("us-central1-a" → "us-central1"). Returns the
-// input unchanged if it doesn't follow the zone-suffix pattern.
-func regionFromZone(zone string) string {
-	if zone == "" {
+// zone string and returns the region. It also accepts a region
+// directly and returns it unchanged — GKE regional clusters carry
+// a region in their `location` field rather than a zone.
+//
+// Heuristic: a region ends with a digit (us-central1, europe-west4,
+// northamerica-northeast1). A zone ends with a single letter
+// (us-central1-a). If the trailing segment after the last hyphen
+// is all letters, it's a zone suffix and we strip it.
+func regionFromZone(s string) string {
+	if s == "" {
 		return ""
 	}
-	if i := strings.LastIndex(zone, "-"); i > 0 {
-		return zone[:i]
+	i := strings.LastIndex(s, "-")
+	if i < 0 {
+		return s
 	}
-	return zone
+	suffix := s[i+1:]
+	if suffix == "" {
+		return s
+	}
+	allLetters := true
+	for _, c := range suffix {
+		if c < 'a' || c > 'z' {
+			allLetters = false
+			break
+		}
+	}
+	if allLetters {
+		return s[:i]
+	}
+	return s
 }
 
 // resolveExistingNetwork resolves a network reference in this

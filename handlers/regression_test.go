@@ -577,6 +577,22 @@ func TestNetworkFKBareNameAndPatchSync(t *testing.T) {
 			"bare-name subnet must be scoped to the zone-derived region; missing-subnet doesn't exist there")
 	})
 
+	t.Run("regional GKE cluster accepts bare-name subnet at location", func(t *testing.T) {
+		// location is a region for regional clusters;
+		// regionFromZone must return it unchanged. The pre-fix code
+		// stripped the trailing "-central1" via simple
+		// LastIndex("-") and returned "us", so subnet-a wasn't
+		// found in region "us" and the cluster create 404'd.
+		resp, body := testutil.DoCreate(t, srv, testutil.ContainerPath(project, region, "clusters"), map[string]any{
+			"cluster": map[string]any{
+				"name":       "regional-cluster",
+				"network":    "projects/" + project + "/global/networks/vpc-a",
+				"subnetwork": "subnet-a",
+			},
+		})
+		assertOperationDone(t, resp, body)
+	})
+
 	t.Run("subnet PATCH that flips network re-derives network_name", func(t *testing.T) {
 		// PATCH the subnet's network from vpc-a to vpc-b. After
 		// the fix the stored network_name flips too, so a later
