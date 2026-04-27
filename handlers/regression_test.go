@@ -541,6 +541,67 @@ func TestPubSubSubscriptionRejectsCrossProjectTopic(t *testing.T) {
 		"foreign-project topic self-link must 404 even though local topic exists")
 }
 
+// TestNetworkFKBareNameAndPatchSync pins two pass-30 fixes:
+//   - bare-name subnet refs (e.g. "subnet-a") are now scoped to
+//     the instance's zone-derived region or the cluster's
+//     location, and a missing/wrong-VPC subnet at that scope is
+//     rejected. Pre-fix code skipped the FK lookup when no
+//     /regions/<r>/ segment was in the ref.
+//   - PATCH that flips `network` on a subnetwork now re-derives
+//     `network_name` so the visible ref and the hidden FK key
+//     stay consistent (no split-brain).
+func TestNetworkFKBareNameAndPatchSync(t *testing.T) {
+	srv, cleanup := testutil.NewTestServer(t)
+	defer cleanup()
+
+	mustCreate(t, srv, testutil.ComputePath(project, "global", "networks"), map[string]any{"name": "vpc-a"})
+	mustCreate(t, srv, testutil.ComputePath(project, "global", "networks"), map[string]any{"name": "vpc-b"})
+	mustCreate(t, srv, testutil.ComputePath(project, "regions", region, "subnetworks"), map[string]any{
+		"name":        "subnet-a",
+		"network":     "projects/" + project + "/global/networks/vpc-a",
+		"ipCidrRange": "10.0.0.0/24",
+	})
+
+	t.Run("bare-name subnet rejected when missing in zone-derived region", func(t *testing.T) {
+		resp, _ := testutil.DoCreate(t, srv, testutil.ComputePath(project, "zones", zone, "instances"), map[string]any{
+			"name":        "vm-bare-missing",
+			"machineType": "zones/" + zone + "/machineTypes/n1-standard-1",
+			"networkInterfaces": []any{
+				map[string]any{
+					"network":    "projects/" + project + "/global/networks/vpc-a",
+					"subnetwork": "missing-subnet",
+				},
+			},
+		})
+		assert.Equal(t, http.StatusNotFound, resp.StatusCode,
+			"bare-name subnet must be scoped to the zone-derived region; missing-subnet doesn't exist there")
+	})
+
+	t.Run("subnet PATCH that flips network re-derives network_name", func(t *testing.T) {
+		// PATCH the subnet's network from vpc-a to vpc-b. After
+		// the fix the stored network_name flips too, so a later
+		// instance bound to vpc-b + subnet-a is accepted (their
+		// stored parent VPC matches).
+		resp, _ := testutil.DoPatch(t, srv, testutil.ComputePath(project, "regions", region, "subnetworks", "subnet-a"), map[string]any{
+			"network": "projects/" + project + "/global/networks/vpc-b",
+		})
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+
+		resp, _ = testutil.DoCreate(t, srv, testutil.ComputePath(project, "zones", zone, "instances"), map[string]any{
+			"name":        "vm-after-flip",
+			"machineType": "zones/" + zone + "/machineTypes/n1-standard-1",
+			"networkInterfaces": []any{
+				map[string]any{
+					"network":    "projects/" + project + "/global/networks/vpc-b",
+					"subnetwork": "projects/" + project + "/regions/" + region + "/subnetworks/subnet-a",
+				},
+			},
+		})
+		assert.Equal(t, http.StatusOK, resp.StatusCode,
+			"after PATCH flipped subnet's network to vpc-b, the VPC/subnet pair check must accept (vpc-b, subnet-a)")
+	})
+}
+
 // TestNetworkFKRejectsWrongCollectionAndPostMergePatch pins two
 // follow-on fixes from pass 28:
 //   - resolveSameProjectName now rejects same-project paths whose

@@ -530,7 +530,7 @@ func (r *Repository) CreateSubnetwork(project, region string, data map[string]an
 	networkName := getString(data, "network_name")
 	if networkName == "" {
 		var err error
-		networkName, err = resolveSameProjectName(project, getString(data, "network"), "networks")
+		networkName, err = r.resolveExistingNetwork(project, getString(data, "network"))
 		if err != nil {
 			return nil, err
 		}
@@ -579,10 +579,28 @@ func (r *Repository) UpdateSubnetwork(project, region, name string, patch map[st
 	merged["project"] = project
 	merged["region"] = region
 
+	// If the patch carries a `network` field, re-derive
+	// `network_name` from it so the two stay consistent. Without
+	// this the visible `network` flips to the patched value while
+	// the hidden FK key keeps the original binding (split-brain).
+	// Real GCE treats `network` as immutable on PATCH; we mirror
+	// that by re-resolving and validating, which 404s if the
+	// patched ref doesn't resolve.
+	if _, patched := patch["network"]; patched {
+		networkName, err := r.resolveExistingNetwork(project, getString(merged, "network"))
+		if err != nil {
+			return nil, err
+		}
+		if networkName == "" {
+			return nil, fmt.Errorf("network reference is required")
+		}
+		merged["network_name"] = networkName
+	}
+
 	networkName := getString(merged, "network_name")
 	if networkName == "" {
 		var err error
-		networkName, err = resolveSameProjectName(project, getString(merged, "network"), "networks")
+		networkName, err = r.resolveExistingNetwork(project, getString(merged, "network"))
 		if err != nil {
 			return nil, err
 		}
@@ -615,7 +633,7 @@ func (r *Repository) CreateFirewall(project string, data map[string]any) (map[st
 	networkName := getString(data, "network_name")
 	if networkName == "" {
 		var err error
-		networkName, err = resolveSameProjectName(project, getString(data, "network"), "networks")
+		networkName, err = r.resolveExistingNetwork(project, getString(data, "network"))
 		if err != nil {
 			return nil, err
 		}
@@ -662,10 +680,21 @@ func (r *Repository) UpdateFirewall(project, name string, patch map[string]any) 
 	merged["name"] = name
 	merged["project"] = project
 
+	if _, patched := patch["network"]; patched {
+		networkName, err := r.resolveExistingNetwork(project, getString(merged, "network"))
+		if err != nil {
+			return nil, err
+		}
+		if networkName == "" {
+			return nil, fmt.Errorf("network reference is required")
+		}
+		merged["network_name"] = networkName
+	}
+
 	networkName := getString(merged, "network_name")
 	if networkName == "" {
 		var err error
-		networkName, err = resolveSameProjectName(project, getString(merged, "network"), "networks")
+		networkName, err = r.resolveExistingNetwork(project, getString(merged, "network"))
 		if err != nil {
 			return nil, err
 		}
@@ -737,7 +766,7 @@ func (r *Repository) CreateInstance(project, zone string, data map[string]any) (
 	// to a non-existent network or subnetwork. Mirror that here so
 	// fakegcp doesn't silently bless miswired Terraform that real
 	// GCE would reject at apply time.
-	if err := r.validateInstanceNetworkInterfaces(project, data); err != nil {
+	if err := r.validateInstanceNetworkInterfaces(project, zone, data); err != nil {
 		return nil, err
 	}
 	data["name"] = name
@@ -765,9 +794,15 @@ func (r *Repository) CreateInstance(project, zone string, data map[string]any) (
 // entry's `network` and `subnetwork` references resolve to an
 // existing resource in the request project, AND that the subnetwork's
 // parent network matches the network reference. Real GCE rejects
-// foreign-project self-links and mismatched VPC/subnet pairs;
-// fakegcp surfaces both as ErrNotFound so the 404 mapping fires.
-func (r *Repository) validateInstanceNetworkInterfaces(project string, data map[string]any) error {
+// foreign-project self-links and mismatched VPC/subnet pairs.
+//
+// instanceZone is the zone the instance is being created in; we
+// fall back to its derived region when the subnet ref doesn't
+// embed a /regions/<r>/ segment (i.e. a bare name). A bare-name
+// subnet ref must still resolve to an existing subnet in that
+// region, otherwise we'd silently accept a dangling/wrong-VPC
+// subnet binding.
+func (r *Repository) validateInstanceNetworkInterfaces(project, instanceZone string, data map[string]any) error {
 	nics, _ := data["networkInterfaces"].([]any)
 	for _, raw := range nics {
 		nic, _ := raw.(map[string]any)
@@ -795,7 +830,12 @@ func (r *Repository) validateInstanceNetworkInterfaces(project string, data map[
 		}
 		region := extractRegionFromSubnetSelfLink(subRef)
 		if region == "" {
-			continue
+			region = regionFromZone(instanceZone)
+		}
+		if region == "" {
+			// No way to scope the subnet lookup — reject rather than
+			// accepting a bare name that could match anything.
+			return models.ErrNotFound
 		}
 		sub, err := r.GetSubnetwork(project, region, subName)
 		if err != nil {
@@ -808,6 +848,38 @@ func (r *Repository) validateInstanceNetworkInterfaces(project string, data map[
 		}
 	}
 	return nil
+}
+
+// regionFromZone strips the trailing "-<zone-letter>" off a GCP
+// zone string ("us-central1-a" → "us-central1"). Returns the
+// input unchanged if it doesn't follow the zone-suffix pattern.
+func regionFromZone(zone string) string {
+	if zone == "" {
+		return ""
+	}
+	if i := strings.LastIndex(zone, "-"); i > 0 {
+		return zone[:i]
+	}
+	return zone
+}
+
+// resolveExistingNetwork resolves a network reference in this
+// project AND verifies the network row exists. Returns ("", nil)
+// when ref is empty so callers can decide whether to error or fall
+// through. Bare names + relative + absolute self-links are all
+// accepted as long as they resolve to a same-project network.
+func (r *Repository) resolveExistingNetwork(project, ref string) (string, error) {
+	netName, err := resolveSameProjectName(project, ref, "networks")
+	if err != nil {
+		return "", err
+	}
+	if netName == "" {
+		return "", nil
+	}
+	if _, err := r.GetNetwork(project, netName); err != nil {
+		return "", err
+	}
+	return netName, nil
 }
 
 // resolveSameProjectName parses a self-link / relative path of the
@@ -891,9 +963,11 @@ func (r *Repository) validateSQLPrivateNetwork(project string, data map[string]a
 // `network` and `subnetwork` references resolve in the request
 // project AND that the subnetwork's parent network matches the
 // requested VPC. Real GKE rejects a cluster whose VPC or subnet
-// is missing or whose subnet doesn't belong to the requested VPC;
-// the pre-fix path silently accepted dangling/cross-project links.
-func (r *Repository) validateClusterNetwork(project string, data map[string]any) error {
+// is missing or whose subnet doesn't belong to the requested VPC.
+// `clusterLocation` is the cluster's location (a region for
+// regional clusters or a zone for zonal); we derive a region from
+// it as a fallback when the subnet ref doesn't embed one.
+func (r *Repository) validateClusterNetwork(project, clusterLocation string, data map[string]any) error {
 	netRef := getString(data, "network")
 	subRef := getString(data, "subnetwork")
 
@@ -915,7 +989,10 @@ func (r *Repository) validateClusterNetwork(project string, data map[string]any)
 	}
 	region := extractRegionFromSubnetSelfLink(subRef)
 	if region == "" {
-		return nil
+		region = regionFromZone(clusterLocation)
+	}
+	if region == "" {
+		return models.ErrNotFound
 	}
 	sub, err := r.GetSubnetwork(project, region, subName)
 	if err != nil {
@@ -1033,7 +1110,7 @@ func (r *Repository) CreateCluster(project, location string, data map[string]any
 	if name == "" {
 		return nil, fmt.Errorf("name is required")
 	}
-	if err := r.validateClusterNetwork(project, data); err != nil {
+	if err := r.validateClusterNetwork(project, location, data); err != nil {
 		return nil, err
 	}
 	data["name"] = name
@@ -1077,7 +1154,7 @@ func (r *Repository) UpdateCluster(project, location, name string, patch map[str
 	// isolation — a patch that only changes `network` (or only
 	// `subnetwork`) could otherwise persist a mismatched
 	// VPC/subnet pair.
-	if err := r.validateClusterNetwork(project, merged); err != nil {
+	if err := r.validateClusterNetwork(project, location, merged); err != nil {
 		return nil, err
 	}
 
@@ -1971,7 +2048,7 @@ func (r *Repository) CreateRouter(project, region string, data map[string]any) (
 	networkName := getString(data, "network_name")
 	if networkName == "" {
 		var err error
-		networkName, err = resolveSameProjectName(project, getString(data, "network"), "networks")
+		networkName, err = r.resolveExistingNetwork(project, getString(data, "network"))
 		if err != nil {
 			return nil, err
 		}
@@ -2017,10 +2094,22 @@ func (r *Repository) UpdateRouter(project, region, name string, patch map[string
 	merged["name"] = name
 	merged["project"] = project
 	merged["region"] = region
+
+	if _, patched := patch["network"]; patched {
+		networkName, err := r.resolveExistingNetwork(project, getString(merged, "network"))
+		if err != nil {
+			return nil, err
+		}
+		if networkName == "" {
+			return nil, fmt.Errorf("network reference is required")
+		}
+		merged["network_name"] = networkName
+	}
+
 	networkName := getString(merged, "network_name")
 	if networkName == "" {
 		var err error
-		networkName, err = resolveSameProjectName(project, getString(merged, "network"), "networks")
+		networkName, err = r.resolveExistingNetwork(project, getString(merged, "network"))
 		if err != nil {
 			return nil, err
 		}
