@@ -529,7 +529,11 @@ func (r *Repository) CreateSubnetwork(project, region string, data map[string]an
 	}
 	networkName := getString(data, "network_name")
 	if networkName == "" {
-		networkName = extractNameFromSelfLink(getString(data, "network"))
+		var err error
+		networkName, err = resolveSameProjectName(project, getString(data, "network"), "networks")
+		if err != nil {
+			return nil, err
+		}
 	}
 	if networkName == "" {
 		return nil, fmt.Errorf("network reference is required")
@@ -577,7 +581,11 @@ func (r *Repository) UpdateSubnetwork(project, region, name string, patch map[st
 
 	networkName := getString(merged, "network_name")
 	if networkName == "" {
-		networkName = extractNameFromSelfLink(getString(merged, "network"))
+		var err error
+		networkName, err = resolveSameProjectName(project, getString(merged, "network"), "networks")
+		if err != nil {
+			return nil, err
+		}
 	}
 	if networkName == "" {
 		return nil, fmt.Errorf("network reference is required")
@@ -606,7 +614,11 @@ func (r *Repository) CreateFirewall(project string, data map[string]any) (map[st
 	}
 	networkName := getString(data, "network_name")
 	if networkName == "" {
-		networkName = extractNameFromSelfLink(getString(data, "network"))
+		var err error
+		networkName, err = resolveSameProjectName(project, getString(data, "network"), "networks")
+		if err != nil {
+			return nil, err
+		}
 	}
 	if networkName == "" {
 		return nil, fmt.Errorf("network reference is required")
@@ -652,7 +664,11 @@ func (r *Repository) UpdateFirewall(project, name string, patch map[string]any) 
 
 	networkName := getString(merged, "network_name")
 	if networkName == "" {
-		networkName = extractNameFromSelfLink(getString(merged, "network"))
+		var err error
+		networkName, err = resolveSameProjectName(project, getString(merged, "network"), "networks")
+		if err != nil {
+			return nil, err
+		}
 	}
 	if networkName == "" {
 		return nil, fmt.Errorf("network reference is required")
@@ -824,6 +840,11 @@ func resolveSameProjectName(project, ref, collection string) (string, error) {
 				return parts[i+1], nil
 			}
 		}
+		// Same project, but the path doesn't include the expected
+		// collection — reject rather than silently matching the
+		// trailing segment against the wrong collection (e.g. an
+		// `addresses` path satisfying a `networks` FK).
+		return "", models.ErrNotFound
 	}
 	return parts[len(parts)-1], nil
 }
@@ -1038,13 +1059,17 @@ func (r *Repository) UpdateCluster(project, location, name string, patch map[str
 	if err != nil {
 		return nil, err
 	}
-	if err := r.validateClusterNetwork(project, patch); err != nil {
-		return nil, err
-	}
 	merged := patchMerge(current, patch, "name", "project", "location")
 	merged["name"] = name
 	merged["project"] = project
 	merged["location"] = location
+	// Validate the post-merge state, not just the patch in
+	// isolation — a patch that only changes `network` (or only
+	// `subnetwork`) could otherwise persist a mismatched
+	// VPC/subnet pair.
+	if err := r.validateClusterNetwork(project, merged); err != nil {
+		return nil, err
+	}
 
 	raw, err := marshalData(merged)
 	if err != nil {
@@ -1139,12 +1164,15 @@ func (r *Repository) UpdateSQLInstance(project, name string, patch map[string]an
 	if err != nil {
 		return nil, err
 	}
-	if err := r.validateSQLPrivateNetwork(project, patch); err != nil {
-		return nil, err
-	}
 	merged := patchMerge(current, patch, "name", "project")
 	merged["name"] = name
 	merged["project"] = project
+	// Validate the post-merge state (matches the cluster path),
+	// so a partial patch can't slip a mismatched privateNetwork
+	// past the FK check.
+	if err := r.validateSQLPrivateNetwork(project, merged); err != nil {
+		return nil, err
+	}
 	raw, err := marshalData(merged)
 	if err != nil {
 		return nil, err
@@ -1932,7 +1960,11 @@ func (r *Repository) CreateRouter(project, region string, data map[string]any) (
 	}
 	networkName := getString(data, "network_name")
 	if networkName == "" {
-		networkName = extractNameFromSelfLink(getString(data, "network"))
+		var err error
+		networkName, err = resolveSameProjectName(project, getString(data, "network"), "networks")
+		if err != nil {
+			return nil, err
+		}
 	}
 	if networkName == "" {
 		return nil, fmt.Errorf("network reference is required")
@@ -1977,7 +2009,11 @@ func (r *Repository) UpdateRouter(project, region, name string, patch map[string
 	merged["region"] = region
 	networkName := getString(merged, "network_name")
 	if networkName == "" {
-		networkName = extractNameFromSelfLink(getString(merged, "network"))
+		var err error
+		networkName, err = resolveSameProjectName(project, getString(merged, "network"), "networks")
+		if err != nil {
+			return nil, err
+		}
 	}
 	if networkName == "" {
 		return nil, fmt.Errorf("network reference is required")

@@ -541,6 +541,68 @@ func TestPubSubSubscriptionRejectsCrossProjectTopic(t *testing.T) {
 		"foreign-project topic self-link must 404 even though local topic exists")
 }
 
+// TestNetworkFKRejectsWrongCollectionAndPostMergePatch pins two
+// follow-on fixes from pass 28:
+//   - resolveSameProjectName now rejects same-project paths whose
+//     collection segment doesn't match the expected one (e.g. an
+//     `addresses` self-link can't satisfy a `networks` FK).
+//   - UpdateCluster validates the *post-merge* state, so a partial
+//     PATCH that flips only `subnetwork` can't smuggle in a
+//     mismatched VPC/subnet pair.
+func TestNetworkFKRejectsWrongCollectionAndPostMergePatch(t *testing.T) {
+	srv, cleanup := testutil.NewTestServer(t)
+	defer cleanup()
+
+	mustCreate(t, srv, testutil.ComputePath(project, "global", "networks"), map[string]any{"name": "vpc-a"})
+	mustCreate(t, srv, testutil.ComputePath(project, "global", "networks"), map[string]any{"name": "vpc-b"})
+	mustCreate(t, srv, testutil.ComputePath(project, "global", "addresses"), map[string]any{"name": "vpc-a"})
+	mustCreate(t, srv, testutil.ComputePath(project, "regions", region, "subnetworks"), map[string]any{
+		"name":        "subnet-a",
+		"network":     "projects/" + project + "/global/networks/vpc-a",
+		"ipCidrRange": "10.0.0.0/24",
+	})
+	mustCreate(t, srv, testutil.ComputePath(project, "regions", region, "subnetworks"), map[string]any{
+		"name":        "subnet-b",
+		"network":     "projects/" + project + "/global/networks/vpc-b",
+		"ipCidrRange": "10.0.1.0/24",
+	})
+
+	t.Run("addresses path cannot satisfy networks FK", func(t *testing.T) {
+		// vpc-a exists as both an address and a network. An
+		// instance pointing at the addresses path must NOT
+		// pass the networks FK by trailing-name collision.
+		resp, _ := testutil.DoCreate(t, srv, testutil.ComputePath(project, "zones", zone, "instances"), map[string]any{
+			"name":        "vm-wrong-collection",
+			"machineType": "zones/" + zone + "/machineTypes/n1-standard-1",
+			"networkInterfaces": []any{
+				map[string]any{"network": "projects/" + project + "/global/addresses/vpc-a"},
+			},
+		})
+		assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+	})
+
+	t.Run("partial PATCH cannot smuggle in mismatched subnet", func(t *testing.T) {
+		// Seed a valid cluster bound to vpc-a + subnet-a.
+		mustCreate(t, srv, testutil.ContainerPath(project, location, "clusters"), map[string]any{
+			"cluster": map[string]any{
+				"name":       "patch-cluster",
+				"network":    "projects/" + project + "/global/networks/vpc-a",
+				"subnetwork": "projects/" + project + "/regions/" + region + "/subnetworks/subnet-a",
+			},
+		})
+
+		// PATCH that only flips subnetwork to subnet-b (which is
+		// in vpc-b, not vpc-a). The pre-fix check would have
+		// validated the patch in isolation and accepted it; now
+		// the post-merge state is validated and the patch fails.
+		resp, _ := testutil.DoPut(t, srv, testutil.ContainerPath(project, location, "clusters", "patch-cluster"), map[string]any{
+			"subnetwork": "projects/" + project + "/regions/" + region + "/subnetworks/subnet-b",
+		})
+		assert.Equal(t, http.StatusNotFound, resp.StatusCode,
+			"flipping just subnetwork to a subnet whose parent VPC differs from the cluster's network must be rejected")
+	})
+}
+
 // TestComputeInstanceRejectsMissingNetwork pins the FK validation
 // added on instance create: a networkInterfaces entry referencing
 // a nonexistent network or subnetwork must 404, not silently
