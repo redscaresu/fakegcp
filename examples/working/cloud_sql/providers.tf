@@ -16,5 +16,5 @@ provider "google" {
     send_after = "0s"
   }
 
-  cloud_sql_custom_endpoint = "http://localhost:8080/sql/v1beta4/"
+  sql_custom_endpoint = "http://localhost:8080/sql/v1beta4/"
 }

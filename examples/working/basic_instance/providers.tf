@@ -22,7 +22,7 @@ provider "google" {
 
   compute_custom_endpoint           = "http://localhost:8080/compute/v1/"
   container_custom_endpoint         = "http://localhost:8080/"
-  cloud_sql_custom_endpoint         = "http://localhost:8080/sql/v1beta4/"
+  sql_custom_endpoint               = "http://localhost:8080/sql/v1beta4/"
   iam_custom_endpoint               = "http://localhost:8080/v1/"
   storage_custom_endpoint           = "http://localhost:8080/storage/v1/"
 }
