@@ -1,4 +1,12 @@
-.PHONY: build test test-race test-coverage test-short test-e2e vet clean run
+.PHONY: install-hooks build test test-race test-coverage test-short test-e2e vet clean run
+
+# install-hooks wires the tracked hook installer at .githooks/ via
+# core.hooksPath so the gitleaks + go test pre-commit gate runs locally
+# on every commit. Mirrors fakeaws/mockway pattern.
+install-hooks:
+	git config core.hooksPath .githooks
+	chmod +x .githooks/pre-commit
+	@echo "Hooks installed: pre-commit will run gitleaks then go test."
 
 build:
 	go build -o fakegcp ./cmd/fakegcp

@@ -1,0 +1,12 @@
+#!/bin/sh
+# fakeaws pre-commit hook (S43-T1 four-file Day-1 invariant).
+# Order matters: gitleaks runs FIRST so secret detection can short-circuit
+# the commit before tests have a chance to print env vars to terminal logs.
+set -e
+echo "Scanning for secrets (gitleaks)..."
+gitleaks protect --staged --no-banner --config .gitleaks.toml
+echo "No secrets detected."
+echo ""
+echo "Running tests..."
+go test ./...
+echo "All tests passed."
