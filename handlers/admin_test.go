@@ -221,6 +221,131 @@ func TestCreateSQLInstancePersistsPrivateNetwork(t *testing.T) {
 	assert.Equal(t, false, ipCfg["ipv4Enabled"])
 }
 
+// TestAdminGetState_ReturnsAllResourcesGroupedByService closes the
+// S41-T1 admin coverage gap: GET /mock/state must return a map
+// keyed by service name, with each value carrying the resources
+// created for that service. Today's shape is:
+//
+//	{
+//	  "compute":  { networks: [...], instances: [...], ... },
+//	  "container": { clusters: [...], nodePools: [...] },
+//	  "sql":      { instances: [...], databases: [...], users: [...] },
+//	  ...
+//	}
+//
+// — see repository.FullState. The test creates one resource across
+// three different services (compute, container, sql) and asserts
+// each one shows up under its own service key.
+func TestAdminGetState_ReturnsAllResourcesGroupedByService(t *testing.T) {
+	srv, cleanup := testutil.NewTestServer(t)
+	defer cleanup()
+
+	// Seed: one resource in each of three services.
+	mustCreate(t, srv, testutil.ComputePath(project, "global", "networks"), map[string]any{
+		"name": "fullstate-net",
+	})
+	mustCreate(t, srv, testutil.ContainerPath(project, location, "clusters"), map[string]any{
+		"cluster": map[string]any{"name": "fullstate-cluster"},
+	})
+	mustCreate(t, srv, testutil.SQLPath(project, "instances"), map[string]any{
+		"name": "fullstate-sql",
+	})
+
+	resp, body := testutil.DoGet(t, srv, "/mock/state")
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.NotNil(t, body)
+
+	// Every well-known service key must be present, even when
+	// empty, so callers can iterate without nil-check fallbacks.
+	for _, svc := range []string{"compute", "container", "sql", "iam", "storage", "operations", "dns", "lb", "secretmanager", "pubsub", "cloudrun"} {
+		require.Contains(t, body, svc, "expected /mock/state to include %s key", svc)
+		assert.IsType(t, map[string]any{}, body[svc], "expected %s to be a service map", svc)
+	}
+
+	// compute.networks contains our network.
+	compute, _ := body["compute"].(map[string]any)
+	require.NotNil(t, compute)
+	networks, _ := compute["networks"].([]any)
+	require.NotEmpty(t, networks, "expected at least one network under compute.networks")
+	foundNet := false
+	for _, n := range networks {
+		nm, _ := n.(map[string]any)
+		if nm == nil {
+			continue
+		}
+		if nm["name"] == "fullstate-net" {
+			foundNet = true
+			break
+		}
+	}
+	assert.True(t, foundNet, "expected compute.networks to include fullstate-net")
+
+	// container.clusters contains our cluster.
+	container, _ := body["container"].(map[string]any)
+	require.NotNil(t, container)
+	clusters, _ := container["clusters"].([]any)
+	require.NotEmpty(t, clusters, "expected at least one cluster under container.clusters")
+
+	// sql.instances contains our SQL instance.
+	sqlState, _ := body["sql"].(map[string]any)
+	require.NotNil(t, sqlState)
+	sqlInstances, _ := sqlState["instances"].([]any)
+	require.NotEmpty(t, sqlInstances, "expected at least one instance under sql.instances")
+}
+
+// TestAdminGetServiceState_ReturnsOnlyThatService pins the
+// /mock/state/{service} route. For a known service name the
+// handler must return that service's section only (same shape as
+// FullState[service]); for an unknown service it must 404.
+func TestAdminGetServiceState_ReturnsOnlyThatService(t *testing.T) {
+	srv, cleanup := testutil.NewTestServer(t)
+	defer cleanup()
+
+	// Seed resources in three services so the assertion that
+	// /mock/state/compute does NOT contain sql/container keys is
+	// non-vacuous.
+	mustCreate(t, srv, testutil.ComputePath(project, "global", "networks"), map[string]any{
+		"name": "scoped-net",
+	})
+	mustCreate(t, srv, testutil.ContainerPath(project, location, "clusters"), map[string]any{
+		"cluster": map[string]any{"name": "scoped-cluster"},
+	})
+	mustCreate(t, srv, testutil.SQLPath(project, "instances"), map[string]any{
+		"name": "scoped-sql",
+	})
+
+	// /mock/state/compute returns only compute's sub-tree.
+	resp, body := testutil.DoGet(t, srv, "/mock/state/compute")
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.NotNil(t, body)
+	require.Contains(t, body, "networks", "compute service-state must surface networks")
+	assert.NotContains(t, body, "clusters", "compute service-state must NOT include container.clusters")
+	assert.NotContains(t, body, "databases", "compute service-state must NOT include sql.databases")
+	networks, _ := body["networks"].([]any)
+	require.NotEmpty(t, networks)
+
+	// /mock/state/sql returns only sql's sub-tree.
+	resp, body = testutil.DoGet(t, srv, "/mock/state/sql")
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.NotNil(t, body)
+	require.Contains(t, body, "instances", "sql service-state must surface instances")
+	assert.NotContains(t, body, "networks", "sql service-state must NOT leak compute.networks")
+	sqlInstances, _ := body["instances"].([]any)
+	require.NotEmpty(t, sqlInstances)
+
+	// /mock/state/container returns only container's sub-tree.
+	resp, body = testutil.DoGet(t, srv, "/mock/state/container")
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.NotNil(t, body)
+	require.Contains(t, body, "clusters")
+	require.Contains(t, body, "nodePools")
+
+	// Unknown service → 404 (ServiceState maps unknown service to
+	// models.ErrNotFound and writeDomainError emits the 404).
+	resp, _ = testutil.DoGet(t, srv, "/mock/state/no-such-service")
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+}
+
 // TestCreateClusterPersistsSubnetwork pins the GKE cluster Network and
 // Subnetwork fields the GCP `vpc_required.rego` policy and topology
 // derivation depend on. The VPC + subnet are seeded first because
