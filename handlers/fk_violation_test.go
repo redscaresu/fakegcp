@@ -272,23 +272,36 @@ func TestNodePoolFKViolationViaRelativePath(t *testing.T) {
 
 // TestSAKeyGetFKViolation: GET an individual SA key under a missing
 // service account must 404 — the keys table FKs on the SA email and
-// the row genuinely doesn't exist, so this surfaces the FK violation
-// at GET time (the closest analogue of "list children of missing
-// parent" we can express without a handler change).
-//
-// NOTE on parent-existence enforcement gap: ListSAKeys today returns
-// 200 with an empty list for a non-existent SA email rather than
-// 404. Real Cloud IAM returns 404 in that case. This is a known
-// fidelity gap to file as a separate follow-up — DO NOT fix in this
-// ticket per the S41-T3 instructions. The GET-by-name path below
-// gives us FK coverage without depending on that buggy List
-// behaviour.
+// the row genuinely doesn't exist.
 func TestSAKeyGetFKViolation(t *testing.T) {
 	srv, cleanup := testutil.NewTestServer(t)
 	defer cleanup()
 
 	email := url.PathEscape("ghost@" + project + ".iam.gserviceaccount.com")
 	resp, _ := testutil.DoGet(t, srv, testutil.IAMPath(project, "serviceAccounts", email, "keys", "any-key-id"))
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+}
+
+// TestSAKeyListFKViolation: LIST keys under a missing service account
+// must 404, matching real Cloud IAM (resource not found on the parent
+// SA). Closes the fidelity gap previously documented inline here.
+func TestSAKeyListFKViolation(t *testing.T) {
+	srv, cleanup := testutil.NewTestServer(t)
+	defer cleanup()
+
+	email := url.PathEscape("ghost@" + project + ".iam.gserviceaccount.com")
+	resp, _ := testutil.DoGet(t, srv, testutil.IAMPath(project, "serviceAccounts", email, "keys"))
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+}
+
+// TestSQLUserListFKViolation: LIST users under a missing SQL instance
+// must 404, matching real Cloud SQL's instanceNotFound. Closes the
+// fidelity gap previously documented in cascade_delete_test.go.
+func TestSQLUserListFKViolation(t *testing.T) {
+	srv, cleanup := testutil.NewTestServer(t)
+	defer cleanup()
+
+	resp, _ := testutil.DoGet(t, srv, testutil.SQLPath(project, "instances", "ghost-sql", "users"))
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
 

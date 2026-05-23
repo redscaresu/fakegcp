@@ -166,7 +166,17 @@ func (app *Application) GetSAKey(w http.ResponseWriter, r *http.Request) {
 }
 
 func (app *Application) ListSAKeys(w http.ResponseWriter, r *http.Request) {
+	project := chi.URLParam(r, "project")
 	email := chi.URLParam(r, "email")
+
+	// Real Cloud IAM returns 404 (resource not found) when the parent
+	// service account doesn't exist. Match that here rather than
+	// silently returning an empty list, which would let callers ignore
+	// a typo'd email.
+	if _, err := app.repo.GetServiceAccount(project, email); err != nil {
+		writeDomainError(w, err)
+		return
+	}
 
 	items, err := app.repo.ListSAKeys(email)
 	if err != nil {

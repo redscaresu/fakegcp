@@ -98,17 +98,10 @@ func TestSQLInstanceDeleteCascadesDatabases(t *testing.T) {
 }
 
 // TestSQLInstanceDeleteCascadesUsers: deleting a Cloud SQL instance
-// wipes every SQL user underneath it. The List handler doesn't
-// itself FK-check the parent instance (it just returns the rows
-// matching instance_name), so we assert the post-cascade list is
-// empty AND the parent instance GET returns 404. The combination
-// proves the cascade fired: rows were created, parent went away,
-// rows are no longer queryable.
-//
-// NOTE on handler-level gap: ListSQLUsers should arguably 404 when
-// the instance is gone (real Cloud SQL does), matching the same
-// gap noted on ListSAKeys in fk_violation_test.go. Filed as a
-// follow-up — not fixed in this ticket per S41 acceptance.
+// wipes every SQL user underneath it. Asserted via two signals: the
+// parent instance GET returns 404 AND ListSQLUsers against the
+// missing parent now returns 404 (matches real Cloud SQL —
+// instanceNotFound on the parent surfaces at the children endpoint).
 func TestSQLInstanceDeleteCascadesUsers(t *testing.T) {
 	srv, cleanup := testutil.NewTestServer(t)
 	defer cleanup()
@@ -136,14 +129,10 @@ func TestSQLInstanceDeleteCascadesUsers(t *testing.T) {
 	resp, _ = testutil.DoGet(t, srv, testutil.SQLPath(project, "instances", instanceName))
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 
-	// Users for that instance are no longer queryable. ListSQLUsers
-	// returns 200 with an empty items list (today's fakegcp behavior),
-	// which is sufficient to prove the rows were cascade-deleted.
-	listResp, listBody = testutil.DoGet(t, srv, testutil.SQLPath(project, "instances", instanceName, "users"))
-	require.Equal(t, http.StatusOK, listResp.StatusCode)
-	if items, ok := listBody["items"].([]any); ok {
-		assert.Empty(t, items, "expected zero users after parent SQL instance delete")
-	}
+	// Users for that instance are no longer queryable: ListSQLUsers
+	// against a missing instance returns 404, matching real Cloud SQL.
+	listResp, _ = testutil.DoGet(t, srv, testutil.SQLPath(project, "instances", instanceName, "users"))
+	assert.Equal(t, http.StatusNotFound, listResp.StatusCode)
 }
 
 // TestServiceAccountDeleteCascadesKeys: deleting an IAM service

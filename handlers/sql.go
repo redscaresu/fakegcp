@@ -235,6 +235,14 @@ func (app *Application) ListSQLUsers(w http.ResponseWriter, r *http.Request) {
 	project := chi.URLParam(r, "project")
 	instance := chi.URLParam(r, "instance")
 
+	// Real Cloud SQL returns 404 (instanceNotFound) when listing users
+	// against a missing instance. Match that rather than silently
+	// returning an empty list.
+	if _, err := app.repo.GetSQLInstance(project, instance); err != nil {
+		writeDomainError(w, err)
+		return
+	}
+
 	items, err := app.repo.ListSQLUsers(project, instance)
 	if err != nil {
 		writeDomainError(w, err)
