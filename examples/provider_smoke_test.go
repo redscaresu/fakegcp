@@ -44,6 +44,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -80,6 +81,33 @@ var (
 	fakegcpBinaryPath string
 	fakegcpBinaryErr  error
 )
+
+// TestKnownBrokenAllowlistSummary prints a CI-greppable summary of every
+// entry in examples/known_broken.yaml. Always runs (no gate, no skip)
+// so the ratchet's current state is visible on every PR run, not just
+// when -v is set and a broken dir fires. Closes S53-T3.
+//
+// Output shape:
+//   known_broken summary: 2 entries
+//   known_broken: working/iam — ... (ticket M46)
+//   known_broken: working/basic_instance — ... (ticket M48)
+//
+// Empty allowlist prints "known_broken summary: 0 entries" so a clean
+// state is unambiguous.
+func TestKnownBrokenAllowlistSummary(t *testing.T) {
+	root := repoRoot(t)
+	broken := loadKnownBroken(t, root)
+	t.Logf("known_broken summary: %d entries", len(broken))
+	keys := make([]string, 0, len(broken))
+	for k := range broken {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		e := broken[k]
+		t.Logf("known_broken: %s — %s (ticket %s)", k, e.Symptom, e.Ticket)
+	}
+}
 
 // TestProviderSmokeWorking walks examples/working/<svc>/ and asserts
 // idempotency: apply → plan -detailed-exitcode (must be no-diff) → destroy.

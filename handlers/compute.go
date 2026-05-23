@@ -7,6 +7,7 @@ import (
 	"math/big"
 	mrand "math/rand"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -369,4 +370,34 @@ func getString(data map[string]any, key string) string {
 		}
 	}
 	return ""
+}
+
+// GetZone returns a static zone descriptor for any {zone} the provider
+// asks about. terraform-provider-google runs a pre-flight GET on the
+// zone before creating compute instances; pre-M48 fakegcp returned 501
+// for this path and the instance create errored out before reaching
+// the /instances handler. We don't model multiple regions/AZ tiers;
+// one shape fits all.
+func (app *Application) GetZone(w http.ResponseWriter, r *http.Request) {
+	project := chi.URLParam(r, "project")
+	zone := chi.URLParam(r, "zone")
+	region := regionFromZone(zone)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"kind":     "compute#zone",
+		"name":     zone,
+		"region":   "projects/" + project + "/regions/" + region,
+		"status":   "UP",
+		"selfLink": "projects/" + project + "/zones/" + zone,
+	})
+}
+
+// regionFromZone extracts the region from a zone id
+// (us-central1-a → us-central1). Conservative: if the input doesn't
+// look like <region>-<az>, return it unchanged.
+func regionFromZone(zone string) string {
+	idx := strings.LastIndex(zone, "-")
+	if idx <= 0 || idx == len(zone)-1 {
+		return zone
+	}
+	return zone[:idx]
 }
