@@ -1,0 +1,38 @@
+# examples/known_broken.yaml — known-broken examples allowlisted from
+# the provider_smoke_test idempotency gate. Each entry: a directory
+# path relative to examples/, the failure symptom, and a tracking
+# ticket id in infrafactory/BACKLOG.md.
+#
+# Removing an entry is the closing step of the matching fidelity-fix
+# ticket. If a dir on this list starts PASSING idempotency, the test
+# FAILS ("congratulations, remove this entry") — ratchet-only-tighten.
+
+entries:
+  - dir: working/basic_instance
+    symptom: "apply fails reading subnetwork — fakegcp returns subnetwork_id as string instead of int"
+    ticket: M43
+  - dir: working/dns
+    symptom: "second apply reports drift on DNS zone/record fields"
+    ticket: M44
+  - dir: working/gke_cluster
+    symptom: "apply fails deleting default node pool (404) — fakegcp container handler shape gap"
+    ticket: M45
+  - dir: working/iam
+    symptom: "apply fails creating service account (401 ACCESS_TOKEN_TYPE_UNSUPPORTED) — fakegcp IAM auth shape gap"
+    ticket: M46
+  - dir: working/storage
+    symptom: "second apply reports drift on storage_bucket fields (uniform_bucket_level_access, updated, etc)"
+    ticket: M47
+
+  # updates/ entries that hit the same underlying bug as their working/ peer.
+  # These auto-close when M44/M46/M47 land — the working/ + updates/ entries
+  # are removed together.
+  - dir: updates/update_dns_record
+    symptom: "second apply at v1 reports drift on DNS record fields (same root cause as working/dns, M44)"
+    ticket: M44
+  - dir: updates/update_iam_service_account
+    symptom: "apply fails creating service account (401 ACCESS_TOKEN_TYPE_UNSUPPORTED) — same root cause as working/iam, M46"
+    ticket: M46
+  - dir: updates/update_storage_bucket
+    symptom: "second apply at v1 reports drift on storage_bucket fields (same root cause as working/storage, M47)"
+    ticket: M47
