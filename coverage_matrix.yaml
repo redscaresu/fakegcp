@@ -1,0 +1,292 @@
+# fakegcp coverage_matrix.yaml — sole source of truth for
+# internal/audit/audit_test.go::TestFullCoverageAudit. Each entry
+# asserts four invariants:
+#  (a) integration test in handlers/*_test.go matches integration_test_func_name
+#  (b) examples/working/<working_dir_name>/ exists OR working_exempt: true with reason
+#  (c) examples/misconfigured/<misconfigured_dir_name>/ exists OR misconfigured_exempt
+#  (d) examples/updates/<updates_dir_name>/ exists OR updates_exempt
+#
+# Unlike the fakeaws sibling, fakegcp does NOT enforce a per-resource
+# scenario anchor invariant — the gcp-*.yaml scenarios under
+# infrafactory/scenarios/training/ don't carry resource anchors in the
+# same way.
+#
+# Schema:
+# - service: one of {cloudrun, compute, container, dns, iam,
+#                    loadbalancer, pubsub, secretmanager, sql, storage}
+# - gcp_resource_type: terraform-provider-google resource id, e.g.
+#   "google_compute_network", "google_sql_database_instance"
+# - scenario_resource_type: cloud-neutral scenario.schema.json key
+#   (compute|networking|database|kubernetes|iam|registry|redis|storage|
+#    pubsub|dns|cloud_run|secret_manager|messaging) or null
+# - working_dir_name / misconfigured_dir_name / updates_dir_name:
+#   per-tree directory names under examples/{working,misconfigured,updates}/
+#   (default: gcp_resource_type without google_ prefix)
+# - working_exempt / misconfigured_exempt / updates_exempt: bool, with
+#   *_exempt_reason: required iff exempt
+# - integration_test_func_name: regex matching ≥1 TestXxx in handlers/*_test.go
+#   (default: ^Test.*<gcp_resource_type-camel-cased>.*)
+
+entries:
+  # ----- compute: VPC + subnetwork + firewall + instance + LB sub-resources -----
+  - service: compute
+    gcp_resource_type: google_compute_network
+    scenario_resource_type: networking
+    working_dir_name: basic_instance
+    misconfigured_exempt: true
+    misconfigured_exempt_reason: "Network has no inbound FK refs (children FK on network; the misconfigured target is on the children, e.g., instance_missing_network, firewall_wrong_network, subnetwork_wrong_network_ref)."
+    updates_exempt: true
+    updates_exempt_reason: "Network at v1 is immutable beyond auto-created subnet flag; mutation flows are exercised on dependent resources."
+    integration_test_func_name: "^TestNetworkCRUD$"
+  - service: compute
+    gcp_resource_type: google_compute_subnetwork
+    scenario_resource_type: networking
+    working_dir_name: basic_instance
+    misconfigured_dir_name: subnetwork_wrong_network_ref
+    updates_exempt: true
+    updates_exempt_reason: "Subnetwork at v1 is set-once (CIDR + region); update flows exercised on dependent resources."
+    integration_test_func_name: "^TestSubnetworkCRUD$"
+  - service: compute
+    gcp_resource_type: google_compute_firewall
+    scenario_resource_type: networking
+    working_dir_name: basic_instance
+    misconfigured_dir_name: firewall_wrong_network
+    updates_exempt: true
+    updates_exempt_reason: "Firewall rule updates are no-ops at v1; full rule-set replacement is the v2 contract."
+    integration_test_func_name: "^TestFirewallCRUD$"
+  - service: compute
+    gcp_resource_type: google_compute_instance
+    scenario_resource_type: compute
+    working_dir_name: basic_instance
+    misconfigured_dir_name: instance_missing_network
+    updates_exempt: true
+    updates_exempt_reason: "Instance attribute updates are no-ops at v1 (state machine handles lifecycle)."
+    integration_test_func_name: "^TestInstanceCRUD$"
+  - service: compute
+    gcp_resource_type: google_compute_disk
+    working_exempt: true
+    working_exempt_reason: "Disk CRUD is exercised inline in TestDiskCRUD; standalone working/disk/ would duplicate (and the instance example doesn't declare a separate disk resource at v1)."
+    misconfigured_exempt: true
+    misconfigured_exempt_reason: "Disk has no inbound FK refs at v1; mismatched zones surface as create-time 404."
+    updates_exempt: true
+    updates_exempt_reason: "Disk resize is out of scope at v1."
+    integration_test_func_name: "^TestDiskCRUD$"
+  - service: compute
+    gcp_resource_type: google_compute_address
+    working_exempt: true
+    working_exempt_reason: "Regional address CRUD is exercised in TestAddressCRUD; aws-vpc-network parity isn't pinned at v1."
+    misconfigured_exempt: true
+    misconfigured_exempt_reason: "Address has no FK gates at v1."
+    updates_exempt: true
+    updates_exempt_reason: "Address attributes are set-once at v1."
+    integration_test_func_name: "^TestAddressCRUD$"
+  - service: compute
+    gcp_resource_type: google_compute_global_address
+    working_dir_name: load_balancer
+    misconfigured_exempt: true
+    misconfigured_exempt_reason: "Global address has no inbound FK gates beyond what TestForwardingRuleFKViolationIPAddress already covers."
+    updates_exempt: true
+    updates_exempt_reason: "Global address is set-once at v1 (delete + recreate)."
+    integration_test_func_name: "^TestGlobalAddressCRUD$"
+  - service: compute
+    gcp_resource_type: google_compute_router
+    working_exempt: true
+    working_exempt_reason: "Router CRUD + delete cascade is asserted in TestRouterCRUD and TestRouterDeleteWithNATs; no working scenario at v1 explicitly demands a router."
+    misconfigured_exempt: true
+    misconfigured_exempt_reason: "Router FK violations covered in TestRouterFKViolation; standalone misconfigured tofu example would duplicate."
+    updates_exempt: true
+    updates_exempt_reason: "Router attributes are set-once at v1."
+    integration_test_func_name: "^TestRouterCRUD$"
+  - service: compute
+    gcp_resource_type: google_compute_router_nat
+    working_exempt: true
+    working_exempt_reason: "Router NAT CRUD is exercised in TestRouterNATCRUD; no scenario pins NAT specifically at v1."
+    misconfigured_exempt: true
+    misconfigured_exempt_reason: "Missing-router rejection asserted in TestRouterNATFKViolation."
+    updates_exempt: true
+    updates_exempt_reason: "Router NAT attribute updates are no-ops at v1."
+    integration_test_func_name: "^TestRouterNATCRUD$"
+
+  # ----- loadbalancer: backend + health check + URL map + proxies + cert + forwarding rule -----
+  - service: loadbalancer
+    gcp_resource_type: google_compute_backend_service
+    working_dir_name: load_balancer
+    misconfigured_dir_name: backend_missing_health_check
+    updates_dir_name: update_load_balancer_backend
+    integration_test_func_name: "^TestBackendServiceCRUD$"
+  - service: loadbalancer
+    gcp_resource_type: google_compute_health_check
+    working_dir_name: load_balancer
+    misconfigured_exempt: true
+    misconfigured_exempt_reason: "Health check has no inbound FK gates; the parent backend_service's missing-health-check rejection is asserted in backend_missing_health_check and TestBackendServiceFKViolationHealthCheck."
+    updates_dir_name: update_load_balancer_backend
+    integration_test_func_name: "^TestHealthCheckCRUD$"
+  - service: loadbalancer
+    gcp_resource_type: google_compute_url_map
+    working_dir_name: load_balancer
+    misconfigured_exempt: true
+    misconfigured_exempt_reason: "URL map's default_service FK rejection is asserted in TestURLMapFKViolationDefaultService."
+    updates_exempt: true
+    updates_exempt_reason: "URL map updates are full-replacement Puts at v1; partial-update is exercised by re-Putting in the working example's apply path."
+    integration_test_func_name: "^TestURLMapCRUD$"
+  - service: loadbalancer
+    gcp_resource_type: google_compute_target_https_proxy
+    working_dir_name: load_balancer
+    misconfigured_exempt: true
+    misconfigured_exempt_reason: "Target HTTPS proxy FK violations (URL map + SSL cert) asserted in TestTargetHTTPSProxyFKViolationURLMap and TestTargetHTTPSProxyFKViolationSSLCert."
+    updates_exempt: true
+    updates_exempt_reason: "Target proxy is set-once at v1 (delete + recreate)."
+    integration_test_func_name: "^TestTargetHTTPSProxyCRUD$"
+  - service: loadbalancer
+    gcp_resource_type: google_compute_ssl_certificate
+    working_dir_name: load_balancer
+    misconfigured_exempt: true
+    misconfigured_exempt_reason: "SSL cert has no inbound FK refs beyond what TestTargetHTTPSProxyFKViolationSSLCert covers."
+    updates_exempt: true
+    updates_exempt_reason: "SSL certs are set-once at v1 (delete + recreate)."
+    integration_test_func_name: "^TestSSLCertificateCRUD$"
+  - service: loadbalancer
+    gcp_resource_type: google_compute_global_forwarding_rule
+    working_dir_name: load_balancer
+    misconfigured_exempt: true
+    misconfigured_exempt_reason: "Target + IP-address FK rejections asserted in TestForwardingRuleFKViolationTarget and TestForwardingRuleFKViolationIPAddress."
+    updates_exempt: true
+    updates_exempt_reason: "Forwarding rule is set-once at v1."
+    integration_test_func_name: "^TestGlobalForwardingRuleCRUD$"
+
+  # ----- container: GKE cluster + node pool -----
+  - service: container
+    gcp_resource_type: google_container_cluster
+    scenario_resource_type: kubernetes
+    working_dir_name: gke_cluster
+    misconfigured_exempt: true
+    misconfigured_exempt_reason: "Cluster has no inbound FK gates at the cluster layer; node-pool-side missing-cluster is asserted in node_pool_missing_cluster."
+    updates_exempt: true
+    updates_exempt_reason: "Cluster updates (version bumps, vpc_config changes) are no-ops at v1; lifecycle is exercised on the node pool."
+    integration_test_func_name: "^TestGKEClusterCRUD$"
+  - service: container
+    gcp_resource_type: google_container_node_pool
+    scenario_resource_type: kubernetes
+    working_dir_name: gke_cluster
+    misconfigured_dir_name: node_pool_missing_cluster
+    updates_exempt: true
+    updates_exempt_reason: "Node-pool scaling_config / machine_type updates are no-ops at v1."
+    integration_test_func_name: "^TestNodePoolCRUD$"
+
+  # ----- sql: Cloud SQL instance + database + user -----
+  - service: sql
+    gcp_resource_type: google_sql_database_instance
+    scenario_resource_type: database
+    working_dir_name: cloud_sql
+    misconfigured_exempt: true
+    misconfigured_exempt_reason: "Instance-level FK gates (missing-network rejection) asserted in TestSQLInstanceRejectsMissingPrivateNetwork."
+    updates_exempt: true
+    updates_exempt_reason: "Instance settings updates (tier, ipConfiguration) are no-ops at v1."
+    integration_test_func_name: "^TestSQLInstanceCRUD$"
+  - service: sql
+    gcp_resource_type: google_sql_database
+    scenario_resource_type: database
+    working_dir_name: cloud_sql
+    misconfigured_dir_name: sql_database_missing_instance
+    updates_exempt: true
+    updates_exempt_reason: "Database attribute updates (charset, collation) are no-ops at v1."
+    integration_test_func_name: "^TestSQLDatabaseCRUD$"
+  - service: sql
+    gcp_resource_type: google_sql_user
+    scenario_resource_type: database
+    working_dir_name: cloud_sql
+    misconfigured_exempt: true
+    misconfigured_exempt_reason: "User-side FK rejection (missing parent instance) asserted in TestSQLUserFKViolation."
+    updates_exempt: true
+    updates_exempt_reason: "User password rotation is out of scope at v1."
+    integration_test_func_name: "^TestSQLUserCRUD$"
+
+  # ----- iam: service account + key -----
+  - service: iam
+    gcp_resource_type: google_service_account
+    scenario_resource_type: iam
+    working_dir_name: iam
+    misconfigured_exempt: true
+    misconfigured_exempt_reason: "Service account has no inbound FK refs at v1; the dependent key-side FK is covered in TestSAKeyFKViolation."
+    updates_dir_name: update_iam_service_account
+    integration_test_func_name: "^TestServiceAccountCRUD$"
+  - service: iam
+    gcp_resource_type: google_service_account_key
+    scenario_resource_type: iam
+    working_dir_name: iam
+    misconfigured_exempt: true
+    misconfigured_exempt_reason: "Missing-parent rejection asserted in TestSAKeyFKViolation; standalone misconfigured tofu example would duplicate."
+    updates_exempt: true
+    updates_exempt_reason: "SA key is set-once at v1 (delete + recreate)."
+    integration_test_func_name: "^TestSAKeyCRUD$"
+
+  # ----- dns: managed zone + record set -----
+  - service: dns
+    gcp_resource_type: google_dns_managed_zone
+    scenario_resource_type: dns
+    working_dir_name: dns
+    misconfigured_exempt: true
+    misconfigured_exempt_reason: "Zone has no inbound FK refs (record-side missing-zone is asserted in record_set_missing_zone + TestDNSRecordSetFKViolation)."
+    updates_dir_name: update_dns_record
+    integration_test_func_name: "^TestDNSZoneCRUD$"
+  - service: dns
+    gcp_resource_type: google_dns_record_set
+    scenario_resource_type: dns
+    working_dir_name: dns
+    misconfigured_dir_name: record_set_missing_zone
+    updates_dir_name: update_dns_record
+    integration_test_func_name: "^TestDNSRecordSetCRUD$"
+
+  # ----- pubsub: topic + subscription -----
+  - service: pubsub
+    gcp_resource_type: google_pubsub_topic
+    scenario_resource_type: pubsub
+    working_dir_name: pubsub
+    misconfigured_exempt: true
+    misconfigured_exempt_reason: "Topic has no inbound FK refs (subscription-side missing-topic asserted in subscription_missing_topic + TestPubSubSubscriptionFKViolation)."
+    updates_dir_name: update_pubsub_subscription
+    integration_test_func_name: "^TestPubSubTopicCRUD$"
+  - service: pubsub
+    gcp_resource_type: google_pubsub_subscription
+    scenario_resource_type: pubsub
+    working_dir_name: pubsub
+    misconfigured_dir_name: subscription_missing_topic
+    updates_dir_name: update_pubsub_subscription
+    integration_test_func_name: "^TestPubSubSubscriptionCRUD$"
+
+  # ----- secretmanager: secret + version -----
+  - service: secretmanager
+    gcp_resource_type: google_secret_manager_secret
+    scenario_resource_type: secret_manager
+    working_dir_name: secret_manager
+    misconfigured_exempt: true
+    misconfigured_exempt_reason: "Secret has no inbound FK refs (version-side missing-secret asserted in secret_version_missing_secret + TestSecretVersionFKViolation)."
+    updates_dir_name: update_secret_manager_secret
+    integration_test_func_name: "^TestSecretCRUD$"
+  - service: secretmanager
+    gcp_resource_type: google_secret_manager_secret_version
+    scenario_resource_type: secret_manager
+    working_dir_name: secret_manager
+    misconfigured_dir_name: secret_version_missing_secret
+    updates_dir_name: update_secret_manager_secret
+    integration_test_func_name: "^TestSecretVersionCRUD$"
+
+  # ----- cloudrun: v2 service -----
+  - service: cloudrun
+    gcp_resource_type: google_cloud_run_v2_service
+    scenario_resource_type: cloud_run
+    working_dir_name: cloud_run
+    misconfigured_exempt: true
+    misconfigured_exempt_reason: "Cloud Run v2 service at v1 has no cross-resource FK refs; misconfigured paths are inline handler tests."
+    updates_dir_name: update_cloud_run_service
+    integration_test_func_name: "^TestCloudRunServiceCRUD$"
+
+  # ----- storage: bucket -----
+  - service: storage
+    gcp_resource_type: google_storage_bucket
+    scenario_resource_type: storage
+    working_dir_name: storage
+    misconfigured_exempt: true
+    misconfigured_exempt_reason: "Storage bucket at v1 has no inbound FK refs (object-level + IAM-side gates out of scope)."
+    updates_dir_name: update_storage_bucket
+    integration_test_func_name: "^TestBucketCRUD$"
