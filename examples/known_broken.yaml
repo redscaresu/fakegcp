@@ -8,13 +8,21 @@
 # FAILS ("congratulations, remove this entry") — ratchet-only-tighten.
 
 entries:
+  - dir: working/basic_instance
+    symptom: "M48 (zone lookup) closed; new gap: provider pre-flights GET /compute/v1/projects/debian-cloud/global/images/debian-11 which fakegcp 501s. Tracked as M50."
+    ticket: M50
+
   - dir: working/dns
-    symptom: "second apply reports drift on DNS zone/record fields (DNS zone shape mismatch on read)"
+    symptom: "second apply reports drift on DNS zone/record fields (handler shape mismatch on read)"
     ticket: M44
 
   - dir: working/gke_cluster
     symptom: "apply fails deleting default node pool (404) — fakegcp container handler shape gap"
     ticket: M45
+
+  - dir: working/iam
+    symptom: "second apply reports drift on service-account fields. Endpoint+auth resolved by ~> 5.0 pin in providers.tf; residual handler-shape mismatch is the real M46 work."
+    ticket: M46
 
   - dir: working/load_balancer
     symptom: "second apply reports drift on forwarding_rule / backend_service / target_pool fields (LB compute resource handler shape gap)"
@@ -26,9 +34,13 @@ entries:
 
   # updates/ entries that hit the same underlying bug as their working/ peer.
   - dir: updates/update_dns_record
-    symptom: "same root cause as working/dns (M44) — DNS record drift after apply v1"
+    symptom: "same root cause as working/dns (M44)"
     ticket: M44
 
+  - dir: updates/update_iam_service_account
+    symptom: "same root cause as working/iam (M46)"
+    ticket: M46
+
   - dir: updates/update_storage_bucket
-    symptom: "same root cause as working/storage (M47) — storage_bucket drift after apply v1"
+    symptom: "same root cause as working/storage (M47)"
     ticket: M47

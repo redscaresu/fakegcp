@@ -287,13 +287,16 @@ func (app *Application) RegisterRoutes(r chi.Router) {
 			r.Get("/operations/{name}", app.GetGlobalOperation)
 			})
 
-			// Zonal resources. GET /zones/{zone} returns a static zone
-			// descriptor so terraform-provider-google's pre-flight zone
-			// lookup (which fires before google_compute_instance create)
-			// succeeds instead of 501ing into the unimplemented catch-all.
-			// M48 close-out.
-			r.Get("/zones/{zone}", app.GetZone)
+			// Zonal resources.
 			r.Route("/zones/{zone}", func(r chi.Router) {
+				// GET /zones/{zone} returns a static zone descriptor
+				// so terraform-provider-google's pre-flight zone lookup
+				// (which fires before google_compute_instance create)
+				// succeeds instead of 501ing. M48 close-out. Must live
+				// inside the Route block — a top-level r.Get on the
+				// same prefix is shadowed by the Route's subrouter.
+				r.Get("/", app.GetZone)
+
 				r.Get("/instances", app.ListInstances)
 				r.Post("/instances", app.CreateInstance)
 				r.Get("/instances/{name}", app.GetInstance)
