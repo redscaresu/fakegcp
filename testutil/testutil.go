@@ -128,6 +128,34 @@ func ResetState(t *testing.T, srv *httptest.Server) {
 	}
 }
 
+// SnapshotState calls POST /mock/snapshot.
+func SnapshotState(t *testing.T, srv *httptest.Server) {
+	t.Helper()
+	resp, _ := doJSON(t, srv, http.MethodPost, "/mock/snapshot", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("snapshot failed: %d", resp.StatusCode)
+	}
+}
+
+// RestoreState calls POST /mock/restore.
+func RestoreState(t *testing.T, srv *httptest.Server) {
+	t.Helper()
+	resp, _ := doJSON(t, srv, http.MethodPost, "/mock/restore", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("restore failed: %d", resp.StatusCode)
+	}
+}
+
+// GetState calls GET /mock/state and returns the parsed body.
+func GetState(t *testing.T, srv *httptest.Server) map[string]any {
+	t.Helper()
+	resp, body := doJSON(t, srv, http.MethodGet, "/mock/state", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("get state failed: %d", resp.StatusCode)
+	}
+	return body
+}
+
 // ComputePath builds a compute API path.
 func ComputePath(project string, parts ...string) string {
 	path := fmt.Sprintf("/compute/v1/projects/%s", project)

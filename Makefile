@@ -1,4 +1,4 @@
-.PHONY: build test test-race test-coverage test-short vet clean run
+.PHONY: build test test-race test-coverage test-short test-e2e vet clean run
 
 build:
 	go build -o fakegcp ./cmd/fakegcp
@@ -22,6 +22,16 @@ test-coverage:
 	@go tool cover -func=coverage.out | tail -1
 	@go tool cover -html=coverage.out -o coverage.html
 	@echo "coverage report: coverage.html"
+
+# test-e2e runs the double-apply idempotency harness against every
+# examples/working/* directory using a freshly built fakegcp. Gated by
+# FAKEGCP_ENABLE_E2E=1 to keep it out of the default `make test` path.
+# Requires tofu or terraform on PATH.
+test-e2e:
+	@if [ "$$FAKEGCP_ENABLE_E2E" != "1" ]; then \
+		echo "test-e2e is gated by FAKEGCP_ENABLE_E2E=1"; exit 0; \
+	fi
+	bash scripts/e2e.sh
 
 vet:
 	go vet ./...
