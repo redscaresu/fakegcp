@@ -63,7 +63,7 @@ fakegcp/
 
 **Key pattern**: DI via `Application` struct. Handlers are thin — delegate to repository. Repository returns domain errors; handlers map to HTTP status codes.
 
-## Services in Scope (Phase 1)
+## Services in Scope
 
 | Service | Path Prefix | Terraform Resources |
 |---------|-------------|-------------------|
@@ -72,6 +72,11 @@ fakegcp/
 | Cloud SQL | `/sql/v1beta4/projects/{project}/` | database_instance, database, user |
 | IAM | `/v1/projects/{project}/` | service_account, service_account_key |
 | Storage | `/storage/v1/` | bucket |
+| DNS | `/dns/v1/projects/{project}/` | managed_zone, record_set |
+| Pub/Sub | `/v1/projects/{project}/` | topic, subscription |
+| Secret Manager | `/v1/projects/{project}/` | secret, secret_version |
+| Cloud Run | `/v2/projects/{project}/locations/{location}/` | service |
+| Memorystore | `/v1/projects/{project}/locations/{location}/` | redis_instance |
 
 ## Testing
 
