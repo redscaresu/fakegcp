@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Memorystore: `google_redis_instance` handler + repository support (fakegcp@9212459). End-to-end lifecycle parity for `apply → plan-no-op → destroy`.
+- `.github/workflows/docker.yml` triggers an image build on every CI success (fakegcp@6bc8f01); `Dockerfile` cleanup.
+- README "API Compatibility" section documenting the wire-shape contract + the `examples/working/<svc>` smoke harness every handler is validated against (fakegcp@205a3ea).
 - 134 handler tests covering GCP Compute (networks, subnetworks, firewalls, disks, instances, addresses), Container (clusters, node pools), Cloud SQL (instances, databases, users), IAM (service accounts, keys, bindings), Storage, DNS, Pub/Sub, Secret Manager, Cloud Run, and Load Balancer.
 - `repository/repository_test.go` (881 lines, 27 test functions) covering CRUD for all 15 named tables + schema migration + FK enforcement (S41-T2).
 - `handlers/fk_violation_test.go` (323 lines, 17 HTTP-layer FK violation tests) + `handlers/cascade_delete_test.go` (237 lines, 6 cascade tests) (S41-T3, T4).
