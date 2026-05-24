@@ -84,6 +84,16 @@ go build -o fakegcp ./cmd/fakegcp
 
 In-memory SQLite by default; pass `--db ./fakegcp.db` for state across restarts.
 
+### Docker
+
+Pre-built multi-arch images are published to GitHub Container Registry on every push to `main`:
+
+```bash
+docker run --rm -p 8080:8080 ghcr.io/redscaresu/fakegcp:latest --port 8080
+```
+
+The Dockerfile in the repo root produces a `~15MB` static image (multi-stage build from `golang:1.25-alpine`).
+
 Point Terraform at it via the per-service `*_custom_endpoint` overrides. The path you append to `localhost:8080` must match where fakegcp registers each service in `handlers/handlers.go` (`/v1/projects/...` for IAM, Pub/Sub, Secret Manager and Cloud Resource Manager; `/v2/...` for Cloud Run; service-prefixed paths for Compute, DNS, Cloud SQL, Storage):
 
 ```hcl
@@ -132,6 +142,42 @@ make run            # build + run on :8080
 ```
 
 `make test-coverage` excludes the `repository` and `models` packages from coverage instrumentation since they have no tests yet (S41-T2 will fill that in). Current handlers package coverage: ~64%.
+
+## API compatibility
+
+The point of fakegcp is to be wire-shape compatible with the real `hashicorp/google` provider — every byte the provider sends or expects to receive must match what real GCP would do, or the provider detects "drift" and the apply loop fails. Three guardrails enforce this; they're identical across [`mockway`](https://github.com/redscaresu/mockway) (Scaleway), [`fakegcp`](https://github.com/redscaresu/fakegcp) (GCP), and [`fakeaws`](https://github.com/redscaresu/fakeaws) (AWS).
+
+### 1. Three example trees, auto-discovered
+
+Every directory under `examples/` is an executable contract against a real Terraform/OpenTofu provider:
+
+| Tree | Contract |
+|---|---|
+| `examples/working/<svc>/` | `apply → plan -detailed-exitcode 0 → destroy` — second plan MUST be a no-op |
+| `examples/misconfigured/<svc>/` | `apply` MUST fail; if `expected.txt` is present, the error output MUST contain that fragment |
+| `examples/updates/<svc>/` | `apply -var-file=v1.tfvars → plan no-op → apply -var-file=v2.tfvars → plan no-op → destroy` |
+
+`examples/provider_smoke_test.go` walks the three trees with `runtime.Caller` and registers each subdirectory as its own `t.Run` sub-test. Adding a directory adds a test — no per-example test wiring. Each sub-test boots a fresh fakegcp on a kernel-assigned port so there's no cross-example state leakage.
+
+The **idempotency gate** (`plan -detailed-exitcode 0`) is the strongest compatibility signal: if fakegcp returns a single field with the wrong case, type, or default, the provider sees drift on the second plan and the test fails. Most of the recent M-ticket fixes (M44 DNS, M45 GKE, M47 Storage, M49 numericID overflow) were caught by this gate.
+
+### 2. `examples/known_broken.yaml` — ratchet-only allowlist
+
+Working examples whose idempotency gate is currently expected to fail are listed in `examples/known_broken.yaml`, each entry pointing at a tracking ticket in [`infrafactory/BACKLOG.md`](https://github.com/redscaresu/infrafactory/blob/main/BACKLOG.md). The smoke harness skips the drift assertion for allowlisted dirs but still runs `apply + destroy`.
+
+The list is **ratchet-only-tighten**: if an allowlisted dir starts passing idempotency, the test fails with `"congratulations, remove this entry"`. Compatibility coverage can only grow, never silently regress.
+
+### 3. Cross-repo e2e from infrafactory
+
+[`infrafactory`](https://github.com/redscaresu/infrafactory) builds fakegcp from this source tree on a free port for every gated GCP e2e test (`TestE2E_GCP*` in `internal/e2e/`, gated by `INFRAFACTORY_ENABLE_E2E=1`). Those tests drive scenarios end-to-end through infrafactory's harness (plan → mock-apply → topology derivation → destroy), so a compatibility regression surfaces in two places: the local `make test-e2e` and the upstream infrafactory CI.
+
+### Adding coverage for a new resource
+
+1. Add an `examples/working/<svc>/` directory with `providers.tf` + `main.tf`.
+2. Run `FAKEGCP_ENABLE_E2E=1 go test ./examples/...` — auto-discovery picks it up.
+3. If it drifts: either fix the handler, or (if the fix is non-trivial) add a `known_broken.yaml` entry pointing at a new BACKLOG ticket.
+4. Mirror with `examples/misconfigured/<svc>/` (FK / validation paths) and `examples/updates/<svc>/` (update paths) as the service warrants.
+5. Add a `TestE2E_GCP<Svc>` in infrafactory's `internal/e2e/gcp_services_test.go` so the cross-repo gate covers the scenario flow too.
 
 ## Resource shape conventions
 
