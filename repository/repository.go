@@ -1232,6 +1232,20 @@ func (r *Repository) DeleteNodePool(project, location, clusterName, name string)
 	return r.deleteWithResult(`DELETE FROM container_node_pools WHERE project = ? AND location = ? AND cluster_name = ? AND name = ?`, project, location, clusterName, name)
 }
 
+// FindNodePoolByName returns the first node pool with the given name across
+// any cluster in the project. Used by the synthetic instanceGroupManagers
+// handler to look up nodeCount when the GKE provider polls IGMs to compute
+// `node_count` for state.
+func (r *Repository) FindNodePoolByName(project, name string) (map[string]any, error) {
+	return r.loadOne(`SELECT data FROM container_node_pools WHERE project = ? AND name = ? LIMIT 1`, project, name)
+}
+
+// ListAllNodePools returns every node pool in the project across all
+// clusters. Used by the synthetic instanceGroupManagers list handler.
+func (r *Repository) ListAllNodePools(project string) ([]map[string]any, error) {
+	return r.loadMany(`SELECT data FROM container_node_pools WHERE project = ? ORDER BY name`, project)
+}
+
 func (r *Repository) CreateSQLInstance(project string, data map[string]any) (map[string]any, error) {
 	name := getString(data, "name")
 	if name == "" {

@@ -14,9 +14,13 @@ import (
 	"github.com/google/uuid"
 )
 
-// numericID generates a random 19-digit numeric string
+// numericID generates a random 18-digit numeric string. We use 18
+// (not 19) because terraform-provider-google parses the GCP `id`
+// field as int64; 19-digit values can exceed int64 max (9.22e18) and
+// the provider returns "expected type 'int', got unconvertible type
+// 'string'".
 func numericID() string {
-	buf := make([]byte, 19)
+	buf := make([]byte, 18)
 	buf[0] = byte('1' + mrand.Intn(9))
 	for i := 1; i < len(buf); i++ {
 		buf[i] = byte('0' + mrand.Intn(10))
@@ -400,4 +404,39 @@ func regionFromZone(zone string) string {
 		return zone
 	}
 	return zone[:idx]
+}
+
+// GetGlobalImage returns a static image descriptor for any {image}.
+// terraform-provider-google pre-flights public-image lookups (e.g.
+// debian-cloud/global/images/debian-11) before google_compute_instance
+// create — pre-M50 fakegcp 501s on this path and the instance create
+// errors out before reaching the /instances handler. Provider consumes
+// name + selfLink + status from the response; the minimal shape works
+// for any project/{image} combination.
+func (app *Application) GetGlobalImage(w http.ResponseWriter, r *http.Request) {
+	project := chi.URLParam(r, "project")
+	image := chi.URLParam(r, "image")
+	writeJSON(w, http.StatusOK, staticImageDescriptor(project, image))
+}
+
+// GetGlobalImageFromFamily mirrors GetGlobalImage for the "from-family"
+// lookup the provider sometimes uses instead (e.g. debian-cloud/global/
+// images/family/debian-11). Returns a synthetic image id derived from
+// the family name so the provider has something stable to reference.
+func (app *Application) GetGlobalImageFromFamily(w http.ResponseWriter, r *http.Request) {
+	project := chi.URLParam(r, "project")
+	family := chi.URLParam(r, "family")
+	writeJSON(w, http.StatusOK, staticImageDescriptor(project, family+"-latest"))
+}
+
+func staticImageDescriptor(project, image string) map[string]any {
+	return map[string]any{
+		"kind":             "compute#image",
+		"name":             image,
+		"status":           "READY",
+		"selfLink":         "projects/" + project + "/global/images/" + image,
+		"diskSizeGb":       "10",
+		"sourceType":       "RAW",
+		"creationTimestamp": "2025-01-01T00:00:00Z",
+	}
 }

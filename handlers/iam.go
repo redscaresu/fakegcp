@@ -119,6 +119,19 @@ func (app *Application) CreateSAKey(w http.ResponseWriter, r *http.Request) {
 	project := chi.URLParam(r, "project")
 	email := chi.URLParam(r, "email")
 
+	// Read the request so we can echo back caller-supplied fields like
+	// keyAlgorithm and privateKeyType — terraform-provider-google
+	// treats missing fields as drift on the next plan ("forces replacement").
+	body, _ := decodeBody(r)
+	keyAlgorithm, _ := body["keyAlgorithm"].(string)
+	if keyAlgorithm == "" {
+		keyAlgorithm = "KEY_ALG_RSA_2048"
+	}
+	privateKeyType, _ := body["privateKeyType"].(string)
+	if privateKeyType == "" {
+		privateKeyType = "TYPE_GOOGLE_CREDENTIALS_FILE"
+	}
+
 	keyID := uuid.NewString()
 	keyName := "projects/" + project + "/serviceAccounts/" + email + "/keys/" + keyID
 
@@ -137,6 +150,9 @@ func (app *Application) CreateSAKey(w http.ResponseWriter, r *http.Request) {
 	data := map[string]any{
 		"name":            keyName,
 		"keyType":         "USER_MANAGED",
+		"keyAlgorithm":    keyAlgorithm,
+		"keyOrigin":       "GOOGLE_PROVIDED",
+		"privateKeyType":  privateKeyType,
 		"privateKeyData":  base64.StdEncoding.EncodeToString(fakeKeyJSON),
 		"validAfterTime":  now.Format(time.RFC3339),
 		"validBeforeTime": now.AddDate(10, 0, 0).Format(time.RFC3339),

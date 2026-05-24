@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -46,6 +47,40 @@ func (app *Application) CreateBucket(w http.ResponseWriter, r *http.Request) {
 	if _, ok := body["location"]; !ok {
 		body["location"] = "US"
 	}
+	// M47 close-out — terraform-provider-google expects:
+	// (a) location normalized to UPPER_CASE (real Cloud Storage
+	//     normalizes "us-central1" → "US-CENTRAL1" on create).
+	// (b) projectNumber set to a positive int (provider state-loader
+	//     treats 0 as "needs refresh" → spurious drift).
+	// (c) publicAccessPrevention, rpo, locationType populated with
+	//     defaults — provider treats `(known after apply)` as
+	//     planned-change, forcing the bucket to be replaced.
+	// (d) softDeletePolicy default (7-day retention, real GCP default).
+	// (e) decorative-empty subobjects stripped (hierarchicalNamespace
+	//     with all-default fields, etc.) so the read shape matches
+	//     what the HCL would round-trip back to.
+	if loc, ok := body["location"].(string); ok && loc != "" {
+		body["location"] = strings.ToUpper(loc)
+	}
+	if _, ok := body["projectNumber"]; !ok {
+		body["projectNumber"] = "100000000001"
+	}
+	if _, ok := body["locationType"]; !ok {
+		body["locationType"] = "region"
+	}
+	if _, ok := body["publicAccessPrevention"]; !ok {
+		body["publicAccessPrevention"] = "inherited"
+	}
+	if _, ok := body["rpo"]; !ok {
+		body["rpo"] = "DEFAULT"
+	}
+	if _, ok := body["softDeletePolicy"]; !ok {
+		body["softDeletePolicy"] = map[string]any{
+			"retentionDurationSeconds": "604800",
+			"effectiveTime":            now,
+		}
+	}
+	stripEmptyBucketSubObjects(body)
 
 	created, err := app.repo.CreateBucket(project, body)
 	if err != nil {
@@ -116,4 +151,40 @@ func (app *Application) DeleteBucket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// stripEmptyBucketSubObjects removes empty/all-default sub-object
+// fields that terraform-provider-google emits as positional
+// placeholders on the create body but would interpret as "configured"
+// if echoed back on read. Same pattern as stripEmptyDNSZoneSubObjects.
+// M47 close-out.
+func stripEmptyBucketSubObjects(body map[string]any) {
+	for _, key := range []string{
+		"hierarchicalNamespace",
+		"versioning",
+		"website",
+		"cors",
+		"lifecycle",
+		"encryption",
+		"logging",
+		"retentionPolicy",
+		"iamConfiguration",
+		"customPlacementConfig",
+		"autoclass",
+		"objectRetention",
+		"ipFilter",
+		"defaultObjectAcl",
+		"labels",
+	} {
+		v, ok := body[key]
+		if !ok {
+			continue
+		}
+		// Don't strip encryption — user explicitly configured it in HCL
+		// and the response shape matters for drift checks. Only strip
+		// when shallow-empty per isShallowEmpty (defined in dns.go).
+		if isShallowEmpty(v) {
+			delete(body, key)
+		}
+	}
 }

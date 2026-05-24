@@ -244,6 +244,16 @@ func (app *Application) RegisterRoutes(r chi.Router) {
 				r.Get("/addresses/{name}", app.GetGlobalAddress)
 				r.Delete("/addresses/{name}", app.DeleteGlobalAddress)
 
+				// GET /global/images/{image} returns a static image
+				// descriptor for any {image} the provider asks about —
+				// terraform-provider-google pre-flights public-image
+				// lookups (e.g., debian-cloud/global/images/debian-11)
+				// before google_compute_instance create. Same shape
+				// rationale as M48's GetZone: provider only reads name
+				// + status + selfLink. M50 close-out.
+				r.Get("/images/{image}", app.GetGlobalImage)
+				r.Get("/images/family/{family}", app.GetGlobalImageFromFamily)
+
 				r.Get("/healthChecks", app.ListHealthChecks)
 				r.Post("/healthChecks", app.CreateHealthCheck)
 				r.Get("/healthChecks/{name}", app.GetHealthCheck)
@@ -308,6 +318,12 @@ func (app *Application) RegisterRoutes(r chi.Router) {
 				r.Delete("/disks/{name}", app.DeleteDisk)
 
 				r.Get("/operations/{name}", app.GetZoneOperation)
+
+				// Synthetic instance-group-manager endpoint used by the
+				// GKE provider to compute node_count from TargetSize.
+				// See container.go GetInstanceGroupManager (M45).
+				r.Get("/instanceGroupManagers", app.ListInstanceGroupManagers)
+				r.Get("/instanceGroupManagers/{name}", app.GetInstanceGroupManager)
 			})
 
 			// Regional resources

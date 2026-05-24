@@ -31,6 +31,14 @@ func (app *Application) CreateDNSZone(w http.ResponseWriter, r *http.Request) {
 	body["nameServers"] = []string{"ns1.fakegcp.com", "ns2.fakegcp.com"}
 	body["creationTime"] = time.Now().Format(time.RFC3339)
 
+	// M44 close-out: terraform-provider-google serializes the absence
+	// of a `private_visibility_config` HCL block as `privateVisibilityConfig: {}`
+	// on the create request body. If we echo that back on read, the
+	// provider interprets the empty struct as "private visibility is
+	// configured" and the next plan reports drift. Strip empty configs
+	// so the GET shape matches the user's HCL.
+	stripEmptyDNSZoneSubObjects(body)
+
 	created, err := app.repo.CreateDNSZone(project, body)
 	if err != nil {
 		writeCreateError(w, err)
@@ -139,6 +147,66 @@ func (app *Application) CreateDNSRecordSet(w http.ResponseWriter, r *http.Reques
 // managed zone doesn't exist in this project. Cloud DNS rejects every
 // rrset/change call against a missing zone with a zone-level 404, not
 // an empty list.
+// stripEmptyDNSZoneSubObjects removes "semantic-empty" sub-object
+// fields that terraform-provider-google sends on create as positional
+// placeholders (e.g. `privateVisibilityConfig: {"networks": []}`) but
+// would interpret as "configured" if echoed back on read, producing
+// spurious drift on the next plan. M44 close-out.
+func stripEmptyDNSZoneSubObjects(body map[string]any) {
+	for _, key := range []string{
+		"privateVisibilityConfig",
+		"dnssecConfig",
+		"forwardingConfig",
+		"peeringConfig",
+		"reverseLookupConfig",
+		"serviceDirectoryConfig",
+		"cloudLoggingConfig",
+	} {
+		if v, ok := body[key]; ok && isShallowEmpty(v) {
+			delete(body, key)
+		}
+	}
+}
+
+// isShallowEmpty returns true when the value is nil, empty map/slice,
+// OR a map whose values are all themselves nil/empty-slice/empty-string/
+// false. Used to recognize semantic-empty config sub-objects that
+// terraform-provider-google emits as positional placeholders.
+func isShallowEmpty(v any) bool {
+	switch typed := v.(type) {
+	case nil:
+		return true
+	case []any:
+		return len(typed) == 0
+	case map[string]any:
+		if len(typed) == 0 {
+			return true
+		}
+		for _, inner := range typed {
+			switch innerTyped := inner.(type) {
+			case nil:
+				continue
+			case []any:
+				if len(innerTyped) != 0 {
+					return false
+				}
+			case string:
+				if innerTyped != "" {
+					return false
+				}
+			case bool:
+				if innerTyped {
+					return false
+				}
+			default:
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
 func (app *Application) requireDNSZone(w http.ResponseWriter, project, zone string) bool {
 	if _, err := app.repo.GetDNSZone(project, zone); err != nil {
 		writeDomainError(w, err)
