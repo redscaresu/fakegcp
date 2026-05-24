@@ -38,6 +38,7 @@ var LandedServices = []string{
 	"dns",
 	"iam",
 	"loadbalancer",
+	"memorystore",
 	"pubsub",
 	"secretmanager",
 	"sql",

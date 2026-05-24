@@ -458,6 +458,19 @@ func (app *Application) RegisterRoutes(r chi.Router) {
 			r.Delete("/services/{service}", app.DeleteCloudRunService)
 		})
 
+		// Memorystore (Redis) v1 — google_redis_instance backing.
+		// Shares the /v1/projects/{project}/locations/{location}
+		// prefix with Cloud SQL but on a different per-collection
+		// path so chi routes them independently when
+		// redis_custom_endpoint points the provider here.
+		r.Route("/v1/projects/{project}/locations/{location}/instances", func(r chi.Router) {
+			r.Post("/", app.CreateRedisInstance)
+			r.Get("/", app.ListRedisInstances)
+			r.Get("/{instance}", app.GetRedisInstance)
+			r.Patch("/{instance}", app.UpdateRedisInstance)
+			r.Delete("/{instance}", app.DeleteRedisInstance)
+		})
+
 		// Storage
 		r.Route("/storage/v1", func(r chi.Router) {
 			r.Get("/b", app.ListBuckets)

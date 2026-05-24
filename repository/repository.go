@@ -194,6 +194,10 @@ func (r *Repository) migrate() error {
 			name TEXT NOT NULL, project TEXT NOT NULL, location TEXT NOT NULL,
 			data TEXT NOT NULL, PRIMARY KEY (project, location, name)
 		)`,
+		`CREATE TABLE IF NOT EXISTS redis_instances (
+			name TEXT NOT NULL, project TEXT NOT NULL, location TEXT NOT NULL,
+			data TEXT NOT NULL, PRIMARY KEY (project, location, name)
+		)`,
 	}
 
 	for _, stmt := range schema {
@@ -1572,6 +1576,7 @@ func (r *Repository) Reset() error {
 		"compute_router_nats",
 		"compute_routers",
 		"cloudrun_services",
+		"redis_instances",
 		"compute_global_forwarding_rules",
 		"compute_target_https_proxies",
 		"compute_url_maps",
@@ -1776,6 +1781,10 @@ func (r *Repository) FullState() (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	redisState, err := r.ServiceState("redis")
+	if err != nil {
+		return nil, err
+	}
 
 	return map[string]any{
 		"compute":       compute,
@@ -1789,6 +1798,7 @@ func (r *Repository) FullState() (map[string]any, error) {
 		"secretmanager": secretManager,
 		"pubsub":        pubsub,
 		"cloudrun":      cloudRun,
+		"redis":         redisState,
 	}, nil
 }
 
@@ -1970,6 +1980,14 @@ func (r *Repository) ServiceState(service string) (map[string]any, error) {
 		}
 		return map[string]any{
 			"services": services,
+		}, nil
+	case "redis":
+		instances, err := r.loadMany(`SELECT data FROM redis_instances ORDER BY project, location, name`)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"instances": instances,
 		}, nil
 	case "storage":
 		buckets, err := r.loadMany(`SELECT data FROM storage_buckets ORDER BY project, name`)
@@ -3008,4 +3026,69 @@ func (r *Repository) UpdateCloudRunService(project, location, name string, patch
 
 func (r *Repository) DeleteCloudRunService(project, location, name string) error {
 	return r.deleteWithResult(`DELETE FROM cloudrun_services WHERE project = ? AND location = ? AND name = ?`, project, location, name)
+}
+
+// ----- Memorystore Redis -----
+//
+// Per-instance state for google_redis_instance. Same shape as the
+// Cloud Run service handlers above — single JSON blob per
+// (project, location, name) tuple. Minimal handler set: Create / Get
+// / List / Patch / Delete, enough to satisfy terraform-provider-google's
+// google_redis_instance apply → plan no-op → destroy lifecycle.
+
+func (r *Repository) CreateRedisInstance(project, location string, data map[string]any) (map[string]any, error) {
+	name := extractNameFromSelfLink(getString(data, "name"))
+	if name == "" {
+		return nil, fmt.Errorf("name is required")
+	}
+	data["project"] = project
+	data["location"] = location
+	data["name"] = fmt.Sprintf("projects/%s/locations/%s/instances/%s", project, location, name)
+	if getString(data, "createTime") == "" {
+		data["createTime"] = nowRFC3339()
+	}
+	if getString(data, "state") == "" {
+		data["state"] = "READY"
+	}
+	raw, err := marshalData(data)
+	if err != nil {
+		return nil, err
+	}
+	_, err = r.db.Exec(`INSERT INTO redis_instances (name, project, location, data) VALUES (?, ?, ?, ?)`, name, project, location, string(raw))
+	if err != nil {
+		return nil, mapInsertError(err)
+	}
+	return r.GetRedisInstance(project, location, name)
+}
+
+func (r *Repository) GetRedisInstance(project, location, name string) (map[string]any, error) {
+	return r.loadOne(`SELECT data FROM redis_instances WHERE project = ? AND location = ? AND name = ?`, project, location, name)
+}
+
+func (r *Repository) ListRedisInstances(project, location string) ([]map[string]any, error) {
+	return r.loadMany(`SELECT data FROM redis_instances WHERE project = ? AND location = ? ORDER BY name`, project, location)
+}
+
+func (r *Repository) UpdateRedisInstance(project, location, name string, patch map[string]any) (map[string]any, error) {
+	current, err := r.GetRedisInstance(project, location, name)
+	if err != nil {
+		return nil, err
+	}
+	merged := patchMerge(current, patch, "name", "project", "location")
+	merged["project"] = project
+	merged["location"] = location
+	merged["name"] = fmt.Sprintf("projects/%s/locations/%s/instances/%s", project, location, name)
+	raw, err := marshalData(merged)
+	if err != nil {
+		return nil, err
+	}
+	_, err = r.db.Exec(`UPDATE redis_instances SET data = ? WHERE project = ? AND location = ? AND name = ?`, string(raw), project, location, name)
+	if err != nil {
+		return nil, err
+	}
+	return merged, nil
+}
+
+func (r *Repository) DeleteRedisInstance(project, location, name string) error {
+	return r.deleteWithResult(`DELETE FROM redis_instances WHERE project = ? AND location = ? AND name = ?`, project, location, name)
 }
