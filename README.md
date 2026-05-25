@@ -205,6 +205,16 @@ fakegcp/
 └── README.md            # this file
 ```
 
+## Documentation
+
+- [`examples/README.md`](examples/README.md) — quickstart for running examples + the per-example breakdown
+- [`AGENTS.md`](AGENTS.md) — fresh-agent entry point: layout, conventions, GCP-vs-Scaleway wire-shape differences
+- [`PLAN.md`](PLAN.md) — phase-by-phase delivery history
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — PR contract, quality gates, pre-commit hook setup
+- [`SECURITY.md`](SECURITY.md) — disclosure policy
+- [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) — community standards
+- [`CHANGELOG.md`](CHANGELOG.md) — Keep a Changelog format
+
 ## Status
 
 Three columns: **Handler** = HTTP routes wired, **Tests** = `handlers/handlers_test.go` covers CRUD (and FK / cascade where the resource has dependents), **Terraform example** = `examples/working/<name>` exercises a full `apply → plan (no-op exit 0) → destroy` cycle against the real `hashicorp/google` provider. A row is fully verified only when all three are checked.
@@ -223,4 +233,4 @@ Three columns: **Handler** = HTTP routes wired, **Tests** = `handlers/handlers_t
 | Secret Manager (secrets, versions) | ✅ | ✅ FK + cascade | [`examples/working/secret_manager`](examples/working/secret_manager) | TestSecretCRUD, TestSecretVersionCRUD, TestSecretDeleteWithVersions |
 | Operations | ✅ | ✅ | n/a | always-DONE shim used by every mutation |
 
-Each entry has been driven manually through `tofu apply → mutate → tofu apply → tofu destroy` against the live `hashicorp/google` Terraform provider, and the matching infrafactory e2e tests (`TestE2E_GCP*`, gated by `INFRAFACTORY_ENABLE_E2E=1`) replay that lifecycle programmatically. There is no continuous-integration runner that walks the example directories themselves yet — the proof points are the gated infrafactory tests plus the per-handler unit tests in `handlers/handlers_test.go` / `handlers/regression_test.go`. The companion `examples/misconfigured/` and `examples/updates/` directories pin FK-violation and update-path coverage for the matching service. See [`examples/README.md`](examples/README.md) for the full lifecycle.
+Each entry has been driven manually through `tofu apply → mutate → tofu apply → tofu destroy` against the live `hashicorp/google` Terraform provider, and the matching infrafactory e2e tests (`TestE2E_GCP*`, gated by `INFRAFACTORY_ENABLE_E2E=1`) replay that lifecycle programmatically. Within this repo, the GitHub Actions CI workflow (`.github/workflows/ci.yml`) runs the handler unit tests + regression tests + gitleaks on every push; the `examples/` smoke gate runs under `FAKEGCP_ENABLE_E2E=1 go test ./examples/...` locally and via the upstream infrafactory CI when gated AWS/GCP e2e tests are enabled. The companion `examples/misconfigured/` and `examples/updates/` directories pin FK-violation and update-path coverage for the matching service. See [`examples/README.md`](examples/README.md) for the full lifecycle.
