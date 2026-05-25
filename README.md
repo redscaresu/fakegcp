@@ -1,5 +1,9 @@
 # fakegcp
 
+[![ci](https://github.com/redscaresu/fakegcp/actions/workflows/ci.yml/badge.svg)](https://github.com/redscaresu/fakegcp/actions/workflows/ci.yml)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Go 1.25+](https://img.shields.io/badge/Go-1.25%2B-00ADD8?logo=go)](go.mod)
+
 Local mock of the Google Cloud Platform API for offline OpenTofu and Terraform testing.
 
 fakegcp runs as a single Go binary, tracks resource state in SQLite, and exposes GCP-shaped REST routes on one port. Modeled after [mockway](https://github.com/redscaresu/mockway) — same admin endpoints, same `apply → plan (no-op) → destroy` drift contract, different cloud.
