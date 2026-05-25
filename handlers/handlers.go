@@ -426,7 +426,30 @@ func (app *Application) RegisterRoutes(r chi.Router) {
 			r.Get("/subscriptions/{subscription}", app.GetSubscription)
 			r.Patch("/subscriptions/{subscription}", app.UpdateSubscription)
 			r.Delete("/subscriptions/{subscription}", app.DeleteSubscription)
+
+			// Service Usage API stub (M70). terraform-provider-google's
+			// google_project_service resource Lists + Reads the
+			// services-enabled state and would normally hit
+			// serviceusage.googleapis.com. fakegcp doesn't model
+			// per-service enable/disable — we treat every service as
+			// "always enabled" so apply succeeds without a feedback
+			// retry iteration. Real Service Usage returns much more
+			// metadata; we emit the minimum the provider's Read flow
+			// inspects (name + state).
+			r.Get("/services", app.ListProjectServices)
+			r.Get("/services/{service}", app.GetProjectService)
+			r.Post("/services/{service}:enable", app.EnableProjectService)
+			r.Post("/services/{service}:disable", app.DisableProjectService)
+			r.Post("/services:batchEnable", app.BatchEnableProjectServices)
 		})
+
+		// Service Usage operation polling endpoint (M70). The provider
+		// GETs operations/<name> after every enable/disable to confirm
+		// completion — without this route, the poll 501s and the
+		// provider hangs until its 20m apply timeout. Mounted outside
+		// the per-project group because the operation URL is
+		// project-less (operations live in a global namespace).
+		r.Get("/v1/operations/{name}", app.GetServiceUsageOperation)
 
 		// DNS
 		r.Route("/dns/v1/projects/{project}", func(r chi.Router) {

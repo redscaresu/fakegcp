@@ -41,6 +41,7 @@ var LandedServices = []string{
 	"memorystore",
 	"pubsub",
 	"secretmanager",
+	"serviceusage",
 	"sql",
 	"storage",
 }
