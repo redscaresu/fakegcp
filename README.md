@@ -178,6 +178,7 @@ The list is **ratchet-only-tighten**: if an allowlisted dir starts passing idemp
 3. If it drifts: either fix the handler, or (if the fix is non-trivial) add a `known_broken.yaml` entry pointing at a new BACKLOG ticket.
 4. Mirror with `examples/misconfigured/<svc>/` (FK / validation paths) and `examples/updates/<svc>/` (update paths) as the service warrants.
 5. Add a `TestE2E_GCP<Svc>` in infrafactory's `internal/e2e/gcp_services_test.go` so the cross-repo gate covers the scenario flow too.
+6. Append the service id to `LandedServices` in `handlers/regression_manifest.go`. This trips infrafactory's `TestCrossRepoParity_EveryLandedServiceHasScenario` (in its `internal/e2e/cross_repo_parity_test.go`) until either (a) a `scenarios/training/gcp-<svc>.yaml` is added on the infrafactory side AND a `cloudParityMap["gcp"]["<svc>"]` entry pointing at it lands in the same PR, or (b) the service is added to that test's `exempt` map with a written reason (current exemptions: `serviceusage` — meta-API exercised transitively by every GCP scenario via `google_project_service`; `memorystore` — handler landed but no infrafactory scenario yet). The parity test runs in infrafactory CI on every push, so landing here without the upstream change will break the badge — coordinate the two PRs.
 
 ## Resource shape conventions
 
