@@ -148,6 +148,60 @@ func TestRegressionSeedAuditNoVacuousPasses(t *testing.T) {
 	}
 }
 
+// TestRegressionSeedAuditHasPatterns is the M85 vacuous-audit guard.
+// The two audits above are necessary but not sufficient: they enforce
+// shape constraints on patterns that EXIST. They do not enforce that
+// patterns exist at all. fakegcp shipped this audit scaffolding with
+// ZERO TestRegression* functions for ~12 months — M79 closed the gap
+// by porting fakeaws's catalogue (13 patterns), but the audit passed
+// CI the whole time prior because there was nothing to validate.
+// This guard asserts a minimum pattern count proportional to the
+// LandedServices manifest so the gap cannot reopen.
+//
+// Threshold: min(len(LandedServices), 8). A floor of 8 keeps small
+// repos from being forced into thin patterns; the per-service cap
+// makes the guard tighten as the surface grows.
+//
+// Counting rule: functions named ^TestRegression but NOT
+// ^TestRegressionSeedAudit (the audit tests themselves don't count).
+func TestRegressionSeedAuditHasPatterns(t *testing.T) {
+	dir := handlersDir(t)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read handlers/: %v", err)
+	}
+	fset := token.NewFileSet()
+	count := 0
+	for _, ent := range entries {
+		if !strings.HasSuffix(ent.Name(), "_test.go") {
+			continue
+		}
+		path := filepath.Join(dir, ent.Name())
+		file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		ast.Inspect(file, func(n ast.Node) bool {
+			fn, ok := n.(*ast.FuncDecl)
+			if !ok || fn.Name == nil {
+				return true
+			}
+			name := fn.Name.Name
+			if strings.HasPrefix(name, "TestRegression") && !strings.HasPrefix(name, "TestRegressionSeedAudit") {
+				count++
+			}
+			return true
+		})
+	}
+	threshold := len(handlers.LandedServices)
+	if threshold > 8 {
+		threshold = 8
+	}
+	if count < threshold {
+		t.Fatalf("vacuous-audit guard: found only %d TestRegression* patterns, need ≥%d (LandedServices has %d entries). Add patterns to handlers/regression_test.go that exercise FK rejection, cascade ordering, wire-shape contracts, etc. See M75/M79 for the pattern catalogue.", count, threshold, len(handlers.LandedServices))
+	}
+}
+
 // ----- helpers (local to the audit suite) -----
 
 func handlersDir(t *testing.T) string {
