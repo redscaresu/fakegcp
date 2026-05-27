@@ -3,12 +3,343 @@ package handlers_test
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/redscaresu/fakegcp/handlers"
 	"github.com/redscaresu/fakegcp/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// Package handlers regression catalogue.
+//
+// These tests encode high-value Terraform misconfiguration patterns
+// documented under examples/misconfigured/. Each public TestRegression...
+// function starts with the manifest-gated helper, then delegates to a
+// check helper so TestRegressionSeedAuditNoVacuousPasses can distinguish
+// landed assertions from pre-seeded stubs.
+
+func requireHandlerImplemented(t *testing.T, id, slice, pattern string) {
+	t.Helper()
+	handlers.RequireHandlerImplementedForTest(t, id, slice, pattern)
+}
+
+// Cross-project FK rejection.
+//
+// Pattern: a self-link that embeds a different project must not be accepted by
+// trailing-name collision. A local VPC named "shared" exists, but an instance
+// reference to projects/other/global/networks/shared must still 404.
+func TestRegressionCrossProjectFKRejection(t *testing.T) {
+	requireHandlerImplemented(t, "compute", "M79", "cross-project fk")
+	checkRegressionCrossProjectFKRejection(t)
+}
+
+// Wrong-collection FK rejection.
+//
+// Pattern: a path in the wrong collection must not satisfy an FK just because
+// its final segment matches. A global address named "vpc" cannot stand in for
+// a compute network named "vpc".
+func TestRegressionWrongCollectionFKRejection(t *testing.T) {
+	requireHandlerImplemented(t, "compute", "M79", "wrong collection fk")
+	checkRegressionWrongCollectionFKRejection(t)
+}
+
+// Pub/Sub subscription topic lifecycle.
+//
+// Pattern: subscriptions validate the referenced topic on create, and deleting
+// a topic leaves surviving subscriptions tombstoned instead of silently
+// rebinding if a topic with the same name is recreated.
+func TestRegressionPubSubSubscriptionTopicFK(t *testing.T) {
+	requireHandlerImplemented(t, "pubsub", "M79", "subscription topic fk")
+	checkRegressionPubSubSubscriptionTopicFK(t)
+}
+
+// DNS record-set parent-zone FK.
+//
+// Pattern: record sets are nested under a managed zone path. A missing zone
+// must reject the create path with 404 rather than creating an orphan rrset.
+func TestRegressionDNSRecordSetMissingZone(t *testing.T) {
+	requireHandlerImplemented(t, "dns", "M79", "record set missing zone")
+	checkRegressionDNSRecordSetMissingZone(t)
+}
+
+// Secret version parent-secret FK.
+//
+// Pattern: addVersion must prove the parent secret exists in the project before
+// storing version state. A hand-written stale secret path must fail with 404.
+func TestRegressionSecretVersionMissingSecret(t *testing.T) {
+	requireHandlerImplemented(t, "secretmanager", "M79", "secret version missing secret")
+	checkRegressionSecretVersionMissingSecret(t)
+}
+
+// Cloud SQL database parent-instance FK.
+//
+// Pattern: databases are addressed beneath SQL instances. Creating a database
+// under a missing instance must return 404, not a malformed success envelope.
+func TestRegressionSQLDatabaseMissingInstance(t *testing.T) {
+	requireHandlerImplemented(t, "sql", "M79", "sql database missing instance")
+	checkRegressionSQLDatabaseMissingInstance(t)
+}
+
+// GKE node-pool parent-cluster FK.
+//
+// Pattern: node pools are nested under clusters. A stale cluster string in HCL
+// must surface as a create-path 404.
+func TestRegressionGKENodePoolMissingCluster(t *testing.T) {
+	requireHandlerImplemented(t, "container", "M79", "node pool missing cluster")
+	checkRegressionGKENodePoolMissingCluster(t)
+}
+
+// Firewall network FK.
+//
+// Pattern: firewall.network is typed as a string, so plan cannot verify it.
+// fakegcp must resolve it against compute networks and reject missing parents.
+func TestRegressionFirewallWrongNetwork(t *testing.T) {
+	requireHandlerImplemented(t, "compute", "M79", "firewall wrong network")
+	checkRegressionFirewallWrongNetwork(t)
+}
+
+// Backend-service health-check FK.
+//
+// Pattern: healthChecks entries may be copied as raw self-links. The backend
+// service create path must resolve every health check before insert.
+func TestRegressionBackendServiceMissingHealthCheck(t *testing.T) {
+	requireHandlerImplemented(t, "loadbalancer", "M79", "backend missing health check")
+	checkRegressionBackendServiceMissingHealthCheck(t)
+}
+
+// Destroy idempotency on missing resources.
+//
+// Pattern: a repeated DELETE after remote state is already gone should return a
+// clean GCP 404 domain error, not a 500 that hides the original destroy issue.
+func TestRegressionDestroyIdempotencyMissingDelete(t *testing.T) {
+	requireHandlerImplemented(t, "compute", "M79", "destroy idempotency missing delete")
+	checkRegressionDestroyIdempotencyMissingDelete(t)
+}
+
+// Operation envelope shape.
+//
+// Pattern: GCP mutations return Operation objects. A create response must be a
+// DONE operation with kind and targetLink, not the resource body directly.
+func TestRegressionOperationEnvelopeShape(t *testing.T) {
+	requireHandlerImplemented(t, "compute", "M79", "operation envelope shape")
+	checkRegressionOperationEnvelopeShape(t)
+}
+
+// IAM service-account project scoping.
+//
+// Pattern: service account reads are project-scoped. A service account created
+// in one project must not be returned through another project's path.
+func TestRegressionIAMServiceAccountWrongProject(t *testing.T) {
+	requireHandlerImplemented(t, "iam", "M79", "iam service account wrong project")
+	checkRegressionIAMServiceAccountWrongProject(t)
+}
+
+// Pub/Sub ack deadline echo.
+//
+// Pattern: ackDeadlineSeconds is a write-then-read field the provider uses for
+// drift detection. Create and PATCH must round-trip the current value.
+func TestRegressionPubSubAckDeadlineEcho(t *testing.T) {
+	requireHandlerImplemented(t, "pubsub", "M79", "pubsub ack deadline echo")
+	checkRegressionPubSubAckDeadlineEcho(t)
+}
+
+func checkRegressionCrossProjectFKRejection(t *testing.T) {
+	srv, cleanup := regressionServer(t)
+	defer cleanup()
+	mustCreate(t, srv, testutil.ComputePath(project, "global", "networks"), map[string]any{"name": "shared"})
+	assertCreateStatus(t, srv, testutil.ComputePath(project, "zones", zone, "instances"), map[string]any{
+		"name": "xproject-vm",
+		"networkInterfaces": []any{
+			map[string]any{"network": "projects/other-project/global/networks/shared"},
+		},
+	}, http.StatusNotFound)
+}
+
+func checkRegressionWrongCollectionFKRejection(t *testing.T) {
+	srv, cleanup := regressionServer(t)
+	defer cleanup()
+	mustCreate(t, srv, testutil.ComputePath(project, "global", "networks"), map[string]any{"name": "vpc"})
+	mustCreate(t, srv, testutil.ComputePath(project, "global", "addresses"), map[string]any{"name": "vpc"})
+	assertCreateStatus(t, srv, testutil.ComputePath(project, "zones", zone, "instances"), map[string]any{
+		"name": "wrong-collection-vm",
+		"networkInterfaces": []any{
+			map[string]any{"network": "projects/" + project + "/global/addresses/vpc"},
+		},
+	}, http.StatusNotFound)
+}
+
+func checkRegressionPubSubSubscriptionTopicFK(t *testing.T) {
+	srv, cleanup := regressionServer(t)
+	defer cleanup()
+	base := testutil.IAMPath(project)
+	assertPutStatus(t, srv, base+"/subscriptions/missing-topic-sub", map[string]any{
+		"topic": "projects/" + project + "/topics/missing-topic",
+	}, http.StatusNotFound)
+	assertPutStatus(t, srv, base+"/topics/events", map[string]any{}, http.StatusOK)
+	assertPutStatus(t, srv, base+"/subscriptions/events-sub", map[string]any{
+		"topic": "projects/" + project + "/topics/events",
+	}, http.StatusOK)
+	resp, _ := testutil.DoDelete(t, srv, base+"/topics/events")
+	assertDeleteStatus(t, resp.StatusCode, http.StatusOK)
+	_, body := testutil.DoGet(t, srv, base+"/subscriptions/events-sub")
+	assertFieldEquals(t, body, "topic", "_deleted-topic_")
+}
+
+func checkRegressionDNSRecordSetMissingZone(t *testing.T) {
+	srv, cleanup := regressionServer(t)
+	defer cleanup()
+	assertCreateStatus(t, srv, "/dns/v1/projects/"+project+"/managedZones/missing-zone/changes", map[string]any{
+		"additions": []any{
+			map[string]any{"name": "host.example.invalid.", "type": "A", "ttl": 300, "rrdatas": []any{"192.0.2.10"}},
+		},
+	}, http.StatusNotFound)
+}
+
+func checkRegressionSecretVersionMissingSecret(t *testing.T) {
+	srv, cleanup := regressionServer(t)
+	defer cleanup()
+	assertCreateStatus(t, srv, testutil.IAMPath(project, "secrets", "missing-secret:addVersion"), map[string]any{
+		"payload": map[string]any{"data": "ZmFrZQ=="},
+	}, http.StatusNotFound)
+}
+
+func checkRegressionSQLDatabaseMissingInstance(t *testing.T) {
+	srv, cleanup := regressionServer(t)
+	defer cleanup()
+	assertCreateStatus(t, srv, testutil.SQLPath(project, "instances", "ghost-sql", "databases"), map[string]any{
+		"name": "app",
+	}, http.StatusNotFound)
+}
+
+func checkRegressionGKENodePoolMissingCluster(t *testing.T) {
+	srv, cleanup := regressionServer(t)
+	defer cleanup()
+	assertCreateStatus(t, srv, testutil.ContainerPath(project, location, "clusters", "ghost-cluster", "nodePools"), map[string]any{
+		"nodePool": map[string]any{"name": "app-pool", "initialNodeCount": 1},
+	}, http.StatusNotFound)
+}
+
+func checkRegressionFirewallWrongNetwork(t *testing.T) {
+	srv, cleanup := regressionServer(t)
+	defer cleanup()
+	assertCreateStatus(t, srv, testutil.ComputePath(project, "global", "firewalls"), map[string]any{
+		"name":    "allow-ssh",
+		"network": "projects/" + project + "/global/networks/does-not-exist",
+		"allowed": []any{
+			map[string]any{"IPProtocol": "tcp", "ports": []any{"22"}},
+		},
+	}, http.StatusNotFound)
+}
+
+func checkRegressionBackendServiceMissingHealthCheck(t *testing.T) {
+	srv, cleanup := regressionServer(t)
+	defer cleanup()
+	assertCreateStatus(t, srv, testutil.ComputePath(project, "global", "backendServices"), map[string]any{
+		"name":         "web-backend",
+		"protocol":     "HTTP",
+		"healthChecks": []any{"projects/" + project + "/global/healthChecks/missing-hc"},
+	}, http.StatusNotFound)
+}
+
+func checkRegressionDestroyIdempotencyMissingDelete(t *testing.T) {
+	srv, cleanup := regressionServer(t)
+	defer cleanup()
+	resp, _ := testutil.DoDelete(t, srv, testutil.ComputePath(project, "global", "networks", "already-gone"))
+	assertDeleteStatus(t, resp.StatusCode, http.StatusNotFound)
+	resp, _ = testutil.DoDelete(t, srv, testutil.SQLPath(project, "instances", "missing-sql", "databases", "app"))
+	assertDeleteStatus(t, resp.StatusCode, http.StatusNotFound)
+}
+
+func checkRegressionOperationEnvelopeShape(t *testing.T) {
+	srv, cleanup := regressionServer(t)
+	defer cleanup()
+	resp, body := testutil.DoCreate(t, srv, testutil.ComputePath(project, "global", "networks"), map[string]any{"name": "op-net"})
+	assertStatusCode(t, resp.StatusCode, http.StatusOK)
+	assertFieldEquals(t, body, "kind", "compute#operation")
+	assertFieldEquals(t, body, "status", "DONE")
+	assertFieldContains(t, body, "targetLink", "/compute/v1/projects/"+project+"/global/networks/op-net")
+}
+
+func checkRegressionIAMServiceAccountWrongProject(t *testing.T) {
+	srv, cleanup := regressionServer(t)
+	defer cleanup()
+	assertCreateStatus(t, srv, testutil.IAMPath(project, "serviceAccounts"), map[string]any{
+		"accountId": "deploy",
+	}, http.StatusOK)
+	email := "deploy@" + project + ".iam.gserviceaccount.com"
+	resp, _ := testutil.DoGet(t, srv, testutil.IAMPath("other-project", "serviceAccounts", email))
+	assertGetStatus(t, resp.StatusCode, http.StatusNotFound)
+}
+
+func checkRegressionPubSubAckDeadlineEcho(t *testing.T) {
+	srv, cleanup := regressionServer(t)
+	defer cleanup()
+	base := testutil.IAMPath(project)
+	assertPutStatus(t, srv, base+"/topics/ack-topic", map[string]any{}, http.StatusOK)
+	assertPutStatus(t, srv, base+"/subscriptions/ack-sub", map[string]any{
+		"topic":              "projects/" + project + "/topics/ack-topic",
+		"ackDeadlineSeconds": 30,
+	}, http.StatusOK)
+	_, body := testutil.DoGet(t, srv, base+"/subscriptions/ack-sub")
+	assertFieldEquals(t, body, "ackDeadlineSeconds", float64(30))
+	resp, body := testutil.DoPatch(t, srv, base+"/subscriptions/ack-sub", map[string]any{
+		"subscription": map[string]any{"ackDeadlineSeconds": 60},
+		"updateMask":   "ackDeadlineSeconds",
+	})
+	assertStatusCode(t, resp.StatusCode, http.StatusOK)
+	assertFieldEquals(t, body, "ackDeadlineSeconds", float64(60))
+}
+
+func regressionServer(t *testing.T) (*httptest.Server, func()) {
+	t.Helper()
+	return testutil.NewTestServer(t)
+}
+
+func assertCreateStatus(t *testing.T, srv *httptest.Server, path string, body map[string]any, want int) {
+	t.Helper()
+	resp, _ := testutil.DoCreate(t, srv, path, body)
+	assertStatusCode(t, resp.StatusCode, want)
+}
+
+func assertPutStatus(t *testing.T, srv *httptest.Server, path string, body map[string]any, want int) {
+	t.Helper()
+	resp, _ := testutil.DoPut(t, srv, path, body)
+	assertStatusCode(t, resp.StatusCode, want)
+}
+
+func assertGetStatus(t *testing.T, got, want int) {
+	t.Helper()
+	assertStatusCode(t, got, want)
+}
+
+func assertDeleteStatus(t *testing.T, got, want int) {
+	t.Helper()
+	assertStatusCode(t, got, want)
+}
+
+func assertStatusCode(t *testing.T, got, want int) {
+	t.Helper()
+	if got != want {
+		t.Fatalf("status: got %d, want %d", got, want)
+	}
+}
+
+func assertFieldEquals(t *testing.T, body map[string]any, key string, want any) {
+	t.Helper()
+	if body[key] != want {
+		t.Fatalf("%s: got %v, want %v", key, body[key], want)
+	}
+}
+
+func assertFieldContains(t *testing.T, body map[string]any, key, want string) {
+	t.Helper()
+	got, _ := body[key].(string)
+	if !strings.Contains(got, want) {
+		t.Fatalf("%s: got %q, want substring %q", key, got, want)
+	}
+}
 
 // TestSecretVersionEnableDisablePersists guards the regression where
 // :enable / :disable mutated the response body but never wrote the
@@ -81,8 +412,8 @@ func TestGetDNSChangeReturnsRecordedChange(t *testing.T) {
 	defer cleanup()
 
 	_, _ = testutil.DoCreate(t, srv, "/dns/v1/projects/"+project+"/managedZones", map[string]any{
-		"name":     "zone1",
-		"dnsName":  "zone1.invalid.",
+		"name":       "zone1",
+		"dnsName":    "zone1.invalid.",
 		"visibility": "public",
 	})
 	resp, body := testutil.DoCreate(t, srv, "/dns/v1/projects/"+project+"/managedZones/zone1/changes", map[string]any{
@@ -137,7 +468,7 @@ func TestLBChainUpdateFKValidation(t *testing.T) {
 
 	// Seed: a minimal valid LB chain we can later patch with bad refs.
 	mustCreate(t, srv, testutil.ComputePath(project, "global", "healthChecks"), map[string]any{
-		"name": "good-hc",
+		"name":            "good-hc",
 		"httpHealthCheck": map[string]any{"port": 80, "requestPath": "/"},
 	})
 	mustCreate(t, srv, testutil.ComputePath(project, "global", "backendServices"), map[string]any{
@@ -955,9 +1286,9 @@ func TestBackendServiceFKValidatesHealthCheckShape(t *testing.T) {
 	})
 
 	cases := []struct {
-		name          string
-		ref           string
-		wantStatus    int
+		name       string
+		ref        string
+		wantStatus int
 	}{
 		{
 			name:       "cross-project self-link rejected",
@@ -1004,9 +1335,9 @@ func TestBackendServiceFKValidatesHealthCheckShape(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			beName := "be-" + string(rune('a'+i))
 			resp, _ := testutil.DoCreate(t, srv, testutil.ComputePath(project, "global", "backendServices"), map[string]any{
-				"name":          beName,
-				"protocol":      "HTTP",
-				"healthChecks":  []any{tc.ref},
+				"name":         beName,
+				"protocol":     "HTTP",
+				"healthChecks": []any{tc.ref},
 			})
 			assert.Equal(t, tc.wantStatus, resp.StatusCode)
 		})
