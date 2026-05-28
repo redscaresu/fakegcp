@@ -7,7 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
+### Added (M70 + M73 + M77 + M79 + M82 + M85, 2026-05-28)
+- **M70 — Service Usage API stub** at `handlers/serviceusage.go`. terraform-provider-google's `google_project_service` resource calls serviceusage.googleapis.com to enable APIs before downstream resources can be created (pubsub.googleapis.com etc.). Previous "Not implemented" 404 forced an LLM retry per scenario. Package-scope `enabledServices` map with per-project tracking, flat-named operations (`operations/sustub-<project>-<service>`), `ListProjectServices` returns just-enabled services so the provider's post-enable polling loop converges. Wires `serviceusage` into LandedServices.
+- **M79 — Regression patterns catalogue** at `handlers/regression_test.go` (13 `TestRegression*` functions). fakegcp had `regression_audit_test.go` + `regression_manifest.go` scaffolding for ~12 months but ZERO patterns — audit passed vacuously. Patterns adapted to GCP's surface: PubSub subscription→topic FK, DNS record-set→zone FK, secret-version→secret FK, SQL database→instance FK, GKE node-pool→cluster FK, firewall wrong-network ref, backend missing health-check, destroy idempotency, operation envelope contract, IAM cross-project FK, etc.
+- **M85 — `TestRegressionSeedAuditHasPatterns`** added — meta-guard asserts pattern count ≥ `min(len(LandedServices), 8)`. Prevents the M79-class "audit scaffolding ships with zero patterns" recurrence.
+- **M73 — README badges** (CI / License / Go-version) under the `# fakegcp` heading for parity.
+- **M82 — Dependabot** at `.github/dependabot.yml` for gomod + github-actions.
+
+### Changed (M77)
+- **testify 1.10.0 → 1.11.1**, **modernc.org/sqlite 1.48.0 → 1.50.0**, **modernc.org/libc 1.70 → 1.72** — coordinated cross-repo dep alignment so fakeaws/fakegcp/mockway share the same shared-dep versions.
+
+### Added (earlier)
 - Memorystore: `google_redis_instance` handler + repository support (fakegcp@9212459). End-to-end lifecycle parity for `apply → plan-no-op → destroy`.
 - `.github/workflows/docker.yml` triggers an image build on every CI success (fakegcp@6bc8f01); `Dockerfile` cleanup.
 - README "API Compatibility" section documenting the wire-shape contract + the `examples/working/<svc>` smoke harness every handler is validated against (fakegcp@205a3ea).
