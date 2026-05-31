@@ -463,7 +463,17 @@ func (app *Application) RegisterRoutes(r chi.Router) {
 		r.Post("/v1/projects/{project}:setIamPolicy", app.SetIAMPolicy)
 		r.Post("/v1/projects/{project}:getIamPolicy", app.GetIAMPolicy)
 
-		// IAM + Cloud Resource Manager root
+		// Cloud Resource Manager v3 — Projects.GetProject (Ticket D-2).
+		// v3 is what terraform-provider-google v5's newer code paths
+		// use (google_service_networking_connection getProject() preflight,
+		// among others). Distinct from v1 — different URL prefix, different
+		// response shape. Without this route + the
+		// resource_manager_v3_custom_endpoint override in infrafactory's
+		// provider template, v3 calls escape to real cloud and surface as
+		// misleading 401 ACCESS_TOKEN_TYPE_UNSUPPORTED errors.
+		r.Get("/v3/projects/{project}", app.GetProjectV3)
+
+		// IAM + Cloud Resource Manager v1 root
 		r.Route("/v1/projects/{project}", func(r chi.Router) {
 			// Cloud Resource Manager — Projects.GetProject (Ticket C).
 			// terraform-provider-google v5's getProject helper preflights
