@@ -21,6 +21,15 @@ type Application struct {
 	dnsChangesMu       sync.RWMutex
 	dnsChanges         map[string]map[string]any
 	dnsChangesSnapshot map[string]map[string]any
+
+	// Service Networking connections (private services access for
+	// google_service_networking_connection). The provider's Read calls
+	// List(parentService).Network(name) so we key the in-memory store
+	// by (service, network) for cheap filter. Stored verbatim from the
+	// create body so subsequent List reflects the same shape.
+	snConnectionsMu       sync.RWMutex
+	snConnections         map[string]map[string]any
+	snConnectionsSnapshot map[string]map[string]any
 }
 
 // dnsChangeKey scopes a cached DNS change record by the
@@ -32,8 +41,9 @@ func dnsChangeKey(project, zone, id string) string {
 
 func NewApplication(repo *repository.Repository) *Application {
 	return &Application{
-		repo:       repo,
-		dnsChanges: map[string]map[string]any{},
+		repo:          repo,
+		dnsChanges:    map[string]map[string]any{},
+		snConnections: map[string]map[string]any{},
 	}
 }
 
@@ -94,6 +104,48 @@ func (app *Application) restoreDNSChanges() {
 		restored[k] = v
 	}
 	app.dnsChanges = restored
+}
+
+// snConnectionKey scopes a Service Networking connection by
+// (parent service, network). The provider's Read filters by network,
+// so this is the unique identity the response shape needs to match.
+func snConnectionKey(service, network string) string {
+	return service + "/" + network
+}
+
+// resetServiceNetworkingConnections clears the cache + snapshot.
+// Mirrors resetDNSChanges so /mock/reset wipes SN state alongside
+// DNS state — without this, connections leak across scenarios and
+// a stale connection from scenario N would surface as a phantom on
+// scenario N+1's Read.
+func (app *Application) resetServiceNetworkingConnections() {
+	app.snConnectionsMu.Lock()
+	defer app.snConnectionsMu.Unlock()
+	app.snConnections = map[string]map[string]any{}
+	app.snConnectionsSnapshot = nil
+}
+
+func (app *Application) snapshotServiceNetworkingConnections() {
+	app.snConnectionsMu.Lock()
+	defer app.snConnectionsMu.Unlock()
+	snap := make(map[string]map[string]any, len(app.snConnections))
+	for k, v := range app.snConnections {
+		snap[k] = v
+	}
+	app.snConnectionsSnapshot = snap
+}
+
+func (app *Application) restoreServiceNetworkingConnections() {
+	app.snConnectionsMu.Lock()
+	defer app.snConnectionsMu.Unlock()
+	if app.snConnectionsSnapshot == nil {
+		return
+	}
+	restored := make(map[string]map[string]any, len(app.snConnectionsSnapshot))
+	for k, v := range app.snConnectionsSnapshot {
+		restored[k] = v
+	}
+	app.snConnections = restored
 }
 
 func decodeBody(r *http.Request) (map[string]any, error) {
@@ -411,8 +463,21 @@ func (app *Application) RegisterRoutes(r chi.Router) {
 		r.Post("/v1/projects/{project}:setIamPolicy", app.SetIAMPolicy)
 		r.Post("/v1/projects/{project}:getIamPolicy", app.GetIAMPolicy)
 
-		// IAM
+		// IAM + Cloud Resource Manager root
 		r.Route("/v1/projects/{project}", func(r chi.Router) {
+			// Cloud Resource Manager — Projects.GetProject (Ticket C).
+			// terraform-provider-google v5's getProject helper preflights
+			// many resources (google_project_service, google_service_-
+			// networking_connection, google_storage_bucket with project
+			// reference) by calling GET /v1/projects/{project} on
+			// cloudresourcemanager.googleapis.com. Without this route,
+			// fakegcp returned 501 and the provider surfaced a confusing
+			// 401-OAuth error (ACCESS_TOKEN_TYPE_UNSUPPORTED) that looked
+			// like the request had escaped to real cloud — wasting a
+			// session debugging "auth escape" before the real problem
+			// was "missing handler". Synthetic always-ACTIVE response.
+			r.Get("/", app.GetProject)
+
 			r.Get("/serviceAccounts", app.ListServiceAccounts)
 			r.Post("/serviceAccounts", app.CreateServiceAccount)
 			r.Get("/serviceAccounts/{email}", app.GetServiceAccount)
@@ -432,6 +497,7 @@ func (app *Application) RegisterRoutes(r chi.Router) {
 			r.Post("/secrets/{secret}:addVersion", app.CreateSecretVersion)
 			r.Get("/secrets/{secret}/versions", app.ListSecretVersions)
 			r.Get("/secrets/{secret}/versions/{version}", app.GetSecretVersion)
+			r.Get("/secrets/{secret}/versions/{version}:access", app.AccessSecretVersion)
 			r.Post("/secrets/{secret}/versions/{version}:destroy", app.DestroySecretVersion)
 			r.Post("/secrets/{secret}/versions/{version}:enable", app.EnableSecretVersion)
 			r.Post("/secrets/{secret}/versions/{version}:disable", app.DisableSecretVersion)
@@ -471,8 +537,38 @@ func (app *Application) RegisterRoutes(r chi.Router) {
 		// project-less (operations live in a global namespace).
 		r.Get("/v1/operations/{name}", app.GetServiceUsageOperation)
 
-		// DNS
-		r.Route("/dns/v1/projects/{project}", func(r chi.Router) {
+		// Service Networking (private services access). The provider's
+		// google_service_networking_connection Create POSTs to
+		// /v1/services/{service}/connections; Read List-filters by
+		// network on the same URL; Patch + DeleteConnection (POST verb)
+		// target /v1/services/{service}/connections/{connection}.
+		// gcp-cloud-sql + gcp-full-stack both wire this resource for
+		// private-IP SQL — without these routes the apply 401s
+		// against the real servicenetworking.googleapis.com.
+		r.Route("/v1/services/{service}/connections", func(r chi.Router) {
+			r.Post("/", app.CreateServiceNetworkingConnection)
+			r.Get("/", app.ListServiceNetworkingConnections)
+			r.Patch("/{connection}", app.PatchServiceNetworkingConnection)
+			r.Post("/{connection}", app.DeleteServiceNetworkingConnection)
+		})
+
+		// DNS routes — registered at two prefixes so both
+		// terraform-provider-google call patterns land on the same
+		// handlers:
+		//
+		// 1) `/dns/v1/projects/{project}` — used by the generated
+		//    google-api-go-client dns/v1 lib (Changes.Create,
+		//    ManagedZones.Get, ResourceRecordSets.List, the change
+		//    waiter). Path comes from googleapi.ResolveRelative on
+		//    the lib's "dns/v1/projects/..." relative URLs.
+		//
+		// 2) `/projects/{project}` — used by zone CRUD which builds
+		//    URLs directly via {{DNSBasePath}}projects/{project}/...
+		//    (resource_dns_managed_zone.go). With dns_custom_endpoint
+		//    set to host-only (the only value that keeps the lib's
+		//    NewDnsClient strip+ReplaceAll from corrupting the port),
+		//    this is where zone CRUD now lands.
+		registerDNSRoutes := func(r chi.Router) {
 			r.Post("/managedZones", app.CreateDNSZone)
 			r.Get("/managedZones", app.ListDNSZones)
 			r.Get("/managedZones/{zone}", app.GetDNSZone)
@@ -485,12 +581,14 @@ func (app *Application) RegisterRoutes(r chi.Router) {
 			r.Get("/managedZones/{zone}/rrsets/{name}/{type}", app.GetDNSRecordSet)
 			r.Delete("/managedZones/{zone}/rrsets/{name}/{type}", app.DeleteDNSRecordSet)
 
-			// google_dns_record_set in the Terraform provider mutates rrsets
-			// via the v1 transactional changes API rather than addressing
-			// rrsets directly. Route those calls through to the rrset store.
+			// google_dns_record_set mutates rrsets via the
+			// transactional changes API rather than addressing rrsets
+			// directly. Route those calls through to the rrset store.
 			r.Post("/managedZones/{zone}/changes", app.CreateDNSChange)
 			r.Get("/managedZones/{zone}/changes/{change}", app.GetDNSChange)
-		})
+		}
+		r.Route("/dns/v1/projects/{project}", registerDNSRoutes)
+		r.Route("/projects/{project}", registerDNSRoutes)
 
 		// Cloud Run v2
 		r.Route("/v2/projects/{project}/locations/{location}", func(r chi.Router) {

@@ -32,6 +32,7 @@ import (
 // here corresponds to ≥1 handlers/<id>*.go file AND every service
 // prefix in handlers/ has a manifest entry (after aliasing).
 var LandedServices = []string{
+	"cloudresourcemanager",
 	"cloudrun",
 	"compute",
 	"container",
@@ -42,6 +43,7 @@ var LandedServices = []string{
 	"memorystore",
 	"pubsub",
 	"secretmanager",
+	"servicenetworking",
 	"serviceusage",
 	"sql",
 	"storage",
