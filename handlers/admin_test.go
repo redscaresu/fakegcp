@@ -132,7 +132,7 @@ func TestListGlobalForwardingRulesReturnsCreatedRule(t *testing.T) {
 
 	// Set up the LB chain that forwardingRules.target now requires.
 	mustCreate(t, srv, testutil.ComputePath(project, "global", "healthChecks"), map[string]any{
-		"name": "test-hc",
+		"name":            "test-hc",
 		"httpHealthCheck": map[string]any{"port": 80, "requestPath": "/"},
 	})
 	mustCreate(t, srv, testutil.ComputePath(project, "global", "backendServices"), map[string]any{

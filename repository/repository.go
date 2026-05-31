@@ -300,7 +300,7 @@ func numericIntID() int64 {
 func numericID() string {
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 	buf := make([]byte, 19)
-	buf[0] = byte('1' + r.Intn(9))
+	buf[0] = byte('1' + r.Intn(8))
 	for i := 1; i < len(buf); i++ {
 		buf[i] = byte('0' + r.Intn(10))
 	}

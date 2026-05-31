@@ -264,7 +264,7 @@ func (app *Application) RegisterRoutes(r chi.Router) {
 				r.Post("/backendServices", app.CreateBackendService)
 				r.Get("/backendServices/{name}", app.GetBackendService)
 				r.Patch("/backendServices/{name}", app.UpdateBackendService)
-			r.Put("/backendServices/{name}", app.UpdateBackendService)
+				r.Put("/backendServices/{name}", app.UpdateBackendService)
 				r.Delete("/backendServices/{name}", app.DeleteBackendService)
 
 				r.Get("/sslCertificates", app.ListSSLCertificates)
@@ -290,11 +290,11 @@ func (app *Application) RegisterRoutes(r chi.Router) {
 				r.Delete("/forwardingRules/{name}", app.DeleteGlobalForwardingRule)
 
 				// Catch-all setLabels for global resources. terraform-provider-
-			// google issues this on every global compute resource even
-			// when there are no labels configured.
-			r.Post("/{collection}/{name}/setLabels", app.SetLabelsGlobal)
+				// google issues this on every global compute resource even
+				// when there are no labels configured.
+				r.Post("/{collection}/{name}/setLabels", app.SetLabelsGlobal)
 
-			r.Get("/operations/{name}", app.GetGlobalOperation)
+				r.Get("/operations/{name}", app.GetGlobalOperation)
 			})
 
 			// Zonal resources.
@@ -353,6 +353,26 @@ func (app *Application) RegisterRoutes(r chi.Router) {
 
 				r.Get("/operations/{name}", app.GetRegionOperation)
 			})
+		})
+
+		// Cloud KMS — minimal stubs so encryption-required policies
+		// (gcp.encryption: CMEK on google_storage_bucket, etc.) can
+		// be satisfied by declaring KMS resources in HCL. We don't
+		// model key material or rotation; just enough to round-trip
+		// google_kms_key_ring + google_kms_crypto_key + their data
+		// sources, plus the IAM bindings the provider issues on read.
+		r.Route("/v1/projects/{project}/locations/{location}/keyRings", func(r chi.Router) {
+			r.Post("/", app.KMSCreateKeyRing)
+			r.Get("/", app.KMSListKeyRings)
+			r.Get("/{keyRing}", app.KMSGetKeyRing)
+			r.Post("/{keyRing}:getIamPolicy", app.KMSGetIamPolicy)
+			r.Post("/{keyRing}:setIamPolicy", app.KMSSetIamPolicy)
+			r.Post("/{keyRing}/cryptoKeys", app.KMSCreateCryptoKey)
+			r.Get("/{keyRing}/cryptoKeys", app.KMSListCryptoKeys)
+			r.Get("/{keyRing}/cryptoKeys/{cryptoKey}", app.KMSGetCryptoKey)
+			r.Patch("/{keyRing}/cryptoKeys/{cryptoKey}", app.KMSUpdateCryptoKey)
+			r.Post("/{keyRing}/cryptoKeys/{cryptoKey}:getIamPolicy", app.KMSGetIamPolicy)
+			r.Post("/{keyRing}/cryptoKeys/{cryptoKey}:setIamPolicy", app.KMSSetIamPolicy)
 		})
 
 		// Container (GKE)

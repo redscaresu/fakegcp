@@ -431,12 +431,12 @@ func (app *Application) GetGlobalImageFromFamily(w http.ResponseWriter, r *http.
 
 func staticImageDescriptor(project, image string) map[string]any {
 	return map[string]any{
-		"kind":             "compute#image",
-		"name":             image,
-		"status":           "READY",
-		"selfLink":         "projects/" + project + "/global/images/" + image,
-		"diskSizeGb":       "10",
-		"sourceType":       "RAW",
+		"kind":              "compute#image",
+		"name":              image,
+		"status":            "READY",
+		"selfLink":          "projects/" + project + "/global/images/" + image,
+		"diskSizeGb":        "10",
+		"sourceType":        "RAW",
 		"creationTimestamp": "2025-01-01T00:00:00Z",
 	}
 }

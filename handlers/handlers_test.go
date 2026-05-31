@@ -925,7 +925,7 @@ func TestURLMapCRUD(t *testing.T) {
 	// so we have to set up the dependency first. The same chain holds in
 	// production: a URL map cannot reference a non-existent backend.
 	mustCreate(t, srv, testutil.ComputePath(project, "global", "healthChecks"), map[string]any{
-		"name": "test-hc",
+		"name":            "test-hc",
 		"httpHealthCheck": map[string]any{"port": 80, "requestPath": "/"},
 	})
 	mustCreate(t, srv, testutil.ComputePath(project, "global", "backendServices"), map[string]any{
@@ -958,7 +958,7 @@ func TestTargetHTTPSProxyCRUD(t *testing.T) {
 	// targetHttpsProxies references urlMap + sslCertificates, both
 	// FK-validated. Set up the prerequisites first.
 	mustCreate(t, srv, testutil.ComputePath(project, "global", "healthChecks"), map[string]any{
-		"name": "test-hc",
+		"name":            "test-hc",
 		"httpHealthCheck": map[string]any{"port": 80, "requestPath": "/"},
 	})
 	mustCreate(t, srv, testutil.ComputePath(project, "global", "backendServices"), map[string]any{
@@ -999,7 +999,7 @@ func TestGlobalForwardingRuleCRUD(t *testing.T) {
 	// proxy collection (targetHttpsProxies in this case). Set up the
 	// full chain first.
 	mustCreate(t, srv, testutil.ComputePath(project, "global", "healthChecks"), map[string]any{
-		"name": "test-hc",
+		"name":            "test-hc",
 		"httpHealthCheck": map[string]any{"port": 80, "requestPath": "/"},
 	})
 	mustCreate(t, srv, testutil.ComputePath(project, "global", "backendServices"), map[string]any{

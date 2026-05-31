@@ -50,6 +50,7 @@ func (app *Application) validateScalarFK(w http.ResponseWriter, body map[string]
 //   - a bare reserved-address name ("lb-ip") — look up against globalAddresses.
 //   - a same-project relative path ("projects/<p>/global/addresses/<n>").
 //   - an absolute self-link ("https://www.googleapis.com/compute/v1/...").
+//
 // Anything else (not a parseable IP, not a recognisable resource
 // path, not a known address name) is rejected as malformed.
 func (app *Application) validateForwardingRuleIPAddress(w http.ResponseWriter, body map[string]any, project string) bool {
