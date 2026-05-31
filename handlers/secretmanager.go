@@ -158,6 +158,47 @@ func (app *Application) GetSecretVersion(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, item)
 }
 
+// AccessSecretVersion implements GET .../versions/{version}:access — the
+// payload-fetching verb. Per the Secret Manager v1 spec the response
+// shape is {name, payload: {data}} where `data` is the base64-encoded
+// payload as it was sent on addVersion. terraform-provider-google's
+// secret_version Read path always issues this in addition to the
+// basic GET on the version; without the route, Read 404s and a tofu
+// apply that re-reads after CreateSecretVersion fails immediately.
+//
+// Both `latest` and a concrete version ID are supported, mirroring
+// GetSecretVersion.
+func (app *Application) AccessSecretVersion(w http.ResponseWriter, r *http.Request) {
+	project := chi.URLParam(r, "project")
+	secret := chi.URLParam(r, "secret")
+	version := chi.URLParam(r, "version")
+
+	var item map[string]any
+	var err error
+	if version == "latest" {
+		item, err = app.repo.GetLatestSecretVersion(project, secret)
+	} else {
+		name := fmt.Sprintf("projects/%s/secrets/%s/versions/%s", project, secret, version)
+		item, err = app.repo.GetSecretVersion(name)
+	}
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+
+	// Build the AccessSecretVersionResponse. Repo stores the verbatim
+	// addVersion body which already includes `payload.data`; lift it
+	// alongside `name` and drop everything else so the response
+	// matches the real API shape.
+	resp := map[string]any{"name": item["name"]}
+	if payload, ok := item["payload"].(map[string]any); ok {
+		resp["payload"] = payload
+	} else {
+		resp["payload"] = map[string]any{"data": ""}
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
 // DestroySecretVersion implements the v1 :destroy verb. Per Secret
 // Manager semantics, the version is *not* deleted — it transitions
 // to state=DESTROYED, the payload is cleared, and a destroyTime is

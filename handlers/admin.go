@@ -12,9 +12,11 @@ func (app *Application) ResetState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Wipe in-memory caches that aren't backed by the SQLite repo
-	// (DNS change history). Without this, change ids from before the
-	// reset would still resolve and diverge from repo state.
+	// (DNS change history, Service Networking connections). Without
+	// this, IDs from before the reset would still resolve and diverge
+	// from repo state.
 	app.resetDNSChanges()
+	app.resetServiceNetworkingConnections()
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }
 
@@ -24,6 +26,7 @@ func (app *Application) SnapshotState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	app.snapshotDNSChanges()
+	app.snapshotServiceNetworkingConnections()
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }
 
@@ -33,6 +36,7 @@ func (app *Application) RestoreState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	app.restoreDNSChanges()
+	app.restoreServiceNetworkingConnections()
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }
 

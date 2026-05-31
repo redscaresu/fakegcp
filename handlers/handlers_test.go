@@ -1088,6 +1088,43 @@ func TestSecretVersionCRUD(t *testing.T) {
 	require.Contains(t, body, "versions")
 }
 
+// TestSecretVersionAccess pins the :access read path. The
+// terraform-provider-google secret_version Read issues both
+// GET .../versions/{version} (basic metadata, already covered) and
+// GET .../versions/{version}:access (payload retrieval) — without
+// the latter route, infrafactory's gcp-secret-manager scenario 404s
+// at Read after a clean Create. The response shape must be
+// {name, payload: {data}} per the Secret Manager v1 spec; the
+// previously-stored addVersion payload is lifted through verbatim.
+func TestSecretVersionAccess(t *testing.T) {
+	srv, cleanup := testutil.NewTestServer(t)
+	defer cleanup()
+
+	_, _ = testutil.DoCreate(t, srv, testutil.IAMPath(project, "secrets"), map[string]any{
+		"secretId":    "test-secret",
+		"replication": map[string]any{"automatic": map[string]any{}},
+	})
+	_, _ = testutil.DoCreate(t, srv, testutil.IAMPath(project, "secrets", "test-secret:addVersion"), map[string]any{
+		"payload": map[string]any{"data": "aGVsbG8="},
+	})
+
+	// Concrete version ID path.
+	resp, body := testutil.DoGet(t, srv, testutil.IAMPath(project, "secrets", "test-secret", "versions", "1:access"))
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Contains(t, body, "name")
+	require.Contains(t, body, "payload")
+	payload, ok := body["payload"].(map[string]any)
+	require.True(t, ok, "payload should be a map; got %T", body["payload"])
+	assert.Equal(t, "aGVsbG8=", payload["data"])
+
+	// `latest` alias.
+	resp, body = testutil.DoGet(t, srv, testutil.IAMPath(project, "secrets", "test-secret", "versions", "latest:access"))
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	payload, ok = body["payload"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "aGVsbG8=", payload["data"])
+}
+
 func TestSecretDeleteWithVersions(t *testing.T) {
 	srv, cleanup := testutil.NewTestServer(t)
 	defer cleanup()

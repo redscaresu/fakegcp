@@ -79,6 +79,22 @@ fakegcp runs as a single Go binary, tracks resource state in SQLite, and exposes
 
 [`infrafactory`](https://github.com/redscaresu/infrafactory) drives fakegcp as the Layer-2 mock-deploy backend for `cloud: gcp` scenarios. The cross-repo e2e helpers in `internal/e2e/helpers.go` build fakegcp from this source tree on a free port for every gated GCP e2e test (`TestE2E_GCP*`), and the topology derivation in `internal/harness/topology_derive_gcp.go` reads `/mock/state` to evaluate connectivity, http_probe, and policy criteria. The seven services with `examples/working/` + `examples/updates/` coverage (Pub/Sub, DNS, Cloud Run, Secret Manager, Compute LB, IAM, Storage) are driven through infrafactory's gated GCP e2e tests when run with `INFRAFACTORY_ENABLE_E2E=1`; the FK-violation paths are pinned by the subset of those services that have `examples/misconfigured/` entries (Pub/Sub, DNS, Secret Manager, Compute LB, plus the Compute instance / network FK). Other resource shapes (e.g. `compute.instances`, `sql.instances`, `container.clusters`) are exercised by handler unit tests in `handlers/handlers_test.go` rather than end-to-end tofu drives.
 
+### One-shot demo (with sibling repos)
+
+If you've cloned the four-repo layout, the easiest way to see fakegcp
+in action is via [`infrafactory`](https://github.com/redscaresu/infrafactory)'s
+`make up`:
+
+```bash
+cd ~/dev && for r in infrafactory fakeaws fakegcp mockway; do git clone https://github.com/redscaresu/$r.git; done
+cd infrafactory && make up
+./bin/infrafactory run scenarios/training/gcp-storage.yaml --config infrafactory.yaml   # drives fakegcp end-to-end
+make down
+```
+
+That brings up fakegcp on `:8081`, exercises a GCP scenario through
+`tofu apply → test → destroy`, and tears everything down.
+
 ## Install / Run
 
 ```bash
