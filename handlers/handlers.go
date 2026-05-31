@@ -413,7 +413,24 @@ func (app *Application) RegisterRoutes(r chi.Router) {
 		// model key material or rotation; just enough to round-trip
 		// google_kms_key_ring + google_kms_crypto_key + their data
 		// sources, plus the IAM bindings the provider issues on read.
-		r.Route("/v1/projects/{project}/locations/{location}/keyRings", func(r chi.Router) {
+		// KMS (Cloud KMS — key rings + crypto keys + IAM).
+		// terraform-provider-google v5's KMS resources use two URL
+		// shapes against the SAME endpoint:
+		//   - LIB CLIENT (READ paths): prepends "v1/projects/..." to
+		//     BasePath, producing /v1/projects/.../keyRings/...
+		//   - TEMPLATE-BASED (CREATE paths): uses {{KMSBasePath}}+raw
+		//     "projects/..." with no v1 prefix, producing
+		//     /projects/.../keyRings/... (no v1).
+		// With kms_custom_endpoint = "%s/" (host-only, per T-E), the
+		// lib-client path lands at /v1/projects/... which is fine —
+		// but the template path lands at /projects/... which had no
+		// handler and 501'd, blocking google_kms_key_ring CREATE.
+		// Solution: register the same handler set under BOTH prefixes.
+		// The body of the closure is identical; we just iterate over
+		// the two prefixes to avoid duplication. Surfaced in
+		// gcp-gke-cluster (2026-05-31) — CMEK-required scenarios all
+		// hit this on KeyRing create.
+		registerKMSRoutes := func(r chi.Router) {
 			r.Post("/", app.KMSCreateKeyRing)
 			r.Get("/", app.KMSListKeyRings)
 			r.Get("/{keyRing}", app.KMSGetKeyRing)
@@ -425,7 +442,9 @@ func (app *Application) RegisterRoutes(r chi.Router) {
 			r.Patch("/{keyRing}/cryptoKeys/{cryptoKey}", app.KMSUpdateCryptoKey)
 			r.Post("/{keyRing}/cryptoKeys/{cryptoKey}:getIamPolicy", app.KMSGetIamPolicy)
 			r.Post("/{keyRing}/cryptoKeys/{cryptoKey}:setIamPolicy", app.KMSSetIamPolicy)
-		})
+		}
+		r.Route("/v1/projects/{project}/locations/{location}/keyRings", registerKMSRoutes)
+		r.Route("/projects/{project}/locations/{location}/keyRings", registerKMSRoutes)
 
 		// Container (GKE)
 		r.Route("/v1/projects/{project}/locations/{location}", func(r chi.Router) {
