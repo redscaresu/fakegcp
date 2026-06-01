@@ -406,8 +406,13 @@ func populateNodePoolDefaults(pool map[string]any) {
 		}
 	}
 	if _, ok := pool["maxPodsConstraint"]; !ok {
+		// maxPodsPerNode is int64,string in the v5 SDK; emitted as a
+		// JSON string (`"110"`), NOT a number. Sending an unquoted
+		// number triggers the SDK's json unmarshal-int64-from-string
+		// path and panics with "invalid use of ,string struct tag,
+		// trying to unmarshal unquoted value into int64".
 		pool["maxPodsConstraint"] = map[string]any{
-			"maxPodsPerNode": float64(110),
+			"maxPodsPerNode": "110",
 		}
 	}
 	if _, ok := pool["podIpv4CidrSize"]; !ok {
@@ -442,7 +447,8 @@ func populateNodePoolDefaults(pool map[string]any) {
 		}
 	}
 	if _, ok := cfg["diskSizeGb"]; !ok {
-		cfg["diskSizeGb"] = float64(100)
+		// NodeConfig.DiskSizeGb is int64,string in the v5 SDK.
+		cfg["diskSizeGb"] = "100"
 	}
 	if _, ok := cfg["diskType"]; !ok {
 		cfg["diskType"] = "pd-standard"
