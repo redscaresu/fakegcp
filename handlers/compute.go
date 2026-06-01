@@ -14,6 +14,154 @@ import (
 	"github.com/google/uuid"
 )
 
+// populateComputeInstanceDefaults fills in nested fields real
+// Compute API would populate server-side but that fakegcp's pure
+// echo handler leaves nil. v5 provider's compute_instance reader
+// derefs these without nil guards, panicking with "Plugin did not
+// respond" on ApplyResourceChange. Surfaced in gcp-full-stack
+// 2026-06-02 sweep.
+func populateComputeInstanceDefaults(body map[string]any) {
+	if _, ok := body["id"]; !ok {
+		body["id"] = numericID()
+	}
+	if _, ok := body["fingerprint"]; !ok {
+		body["fingerprint"] = "abcd1234efgh"
+	}
+	if _, ok := body["cpuPlatform"]; !ok {
+		body["cpuPlatform"] = "Intel Broadwell"
+	}
+	if _, ok := body["canIpForward"]; !ok {
+		body["canIpForward"] = false
+	}
+	if _, ok := body["deletionProtection"]; !ok {
+		body["deletionProtection"] = false
+	}
+	if _, ok := body["startRestricted"]; !ok {
+		body["startRestricted"] = false
+	}
+	if _, ok := body["labelFingerprint"]; !ok {
+		body["labelFingerprint"] = "labelfp1234"
+	}
+	if _, ok := body["labels"]; !ok {
+		body["labels"] = map[string]any{}
+	}
+	if _, ok := body["params"]; !ok {
+		body["params"] = map[string]any{}
+	}
+
+	// metadata sub-block — provider iterates over items and reads
+	// fingerprint. Populate both.
+	meta, ok := body["metadata"].(map[string]any)
+	if !ok {
+		meta = map[string]any{}
+		body["metadata"] = meta
+	}
+	if _, ok := meta["fingerprint"]; !ok {
+		meta["fingerprint"] = "metafp1234"
+	}
+	if _, ok := meta["items"]; !ok {
+		meta["items"] = []any{}
+	}
+	if _, ok := meta["kind"]; !ok {
+		meta["kind"] = "compute#metadata"
+	}
+
+	// tags sub-block — provider reads fingerprint + items.
+	tags, ok := body["tags"].(map[string]any)
+	if !ok {
+		tags = map[string]any{}
+		body["tags"] = tags
+	}
+	if _, ok := tags["fingerprint"]; !ok {
+		tags["fingerprint"] = "tagsfp1234"
+	}
+	if _, ok := tags["items"]; !ok {
+		tags["items"] = []any{}
+	}
+
+	// scheduling sub-block — provider reads automaticRestart,
+	// onHostMaintenance, preemptible.
+	sched, ok := body["scheduling"].(map[string]any)
+	if !ok {
+		sched = map[string]any{}
+		body["scheduling"] = sched
+	}
+	if _, ok := sched["automaticRestart"]; !ok {
+		sched["automaticRestart"] = true
+	}
+	if _, ok := sched["onHostMaintenance"]; !ok {
+		sched["onHostMaintenance"] = "MIGRATE"
+	}
+	if _, ok := sched["preemptible"]; !ok {
+		sched["preemptible"] = false
+	}
+	if _, ok := sched["provisioningModel"]; !ok {
+		sched["provisioningModel"] = "STANDARD"
+	}
+
+	// shieldedInstanceConfig sub-block.
+	if _, ok := body["shieldedInstanceConfig"].(map[string]any); !ok {
+		body["shieldedInstanceConfig"] = map[string]any{
+			"enableSecureBoot":          false,
+			"enableVtpm":                true,
+			"enableIntegrityMonitoring": true,
+		}
+	}
+
+	// networkInterfaces[] — each interface needs a fingerprint +
+	// kind. Provider also reads accessConfigs[] but if the caller
+	// omitted them, leaving as nil array is fine (provider handles
+	// empty).
+	if rawNICs, ok := body["networkInterfaces"].([]any); ok {
+		for i, raw := range rawNICs {
+			nic, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			if _, ok := nic["fingerprint"]; !ok {
+				nic["fingerprint"] = fmt.Sprintf("nic%dfp", i)
+			}
+			if _, ok := nic["kind"]; !ok {
+				nic["kind"] = "compute#networkInterface"
+			}
+			if _, ok := nic["name"]; !ok {
+				nic["name"] = fmt.Sprintf("nic%d", i)
+			}
+			if _, ok := nic["stackType"]; !ok {
+				nic["stackType"] = "IPV4_ONLY"
+			}
+		}
+	}
+
+	// disks[] — each disk needs interface + kind + mode + boot flag
+	// on the first if not set.
+	if rawDisks, ok := body["disks"].([]any); ok {
+		for i, raw := range rawDisks {
+			disk, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			if _, ok := disk["kind"]; !ok {
+				disk["kind"] = "compute#attachedDisk"
+			}
+			if _, ok := disk["mode"]; !ok {
+				disk["mode"] = "READ_WRITE"
+			}
+			if _, ok := disk["interface"]; !ok {
+				disk["interface"] = "SCSI"
+			}
+			if _, ok := disk["type"]; !ok {
+				disk["type"] = "PERSISTENT"
+			}
+			if i == 0 {
+				if _, ok := disk["boot"]; !ok {
+					disk["boot"] = true
+				}
+			}
+		}
+	}
+}
+
 // numericID generates a random 18-digit numeric string. We use 18
 // (not 19) because terraform-provider-google parses the GCP `id`
 // field as int64; 19-digit values can exceed int64 max (9.22e18) and
@@ -87,6 +235,15 @@ func (app *Application) CreateInstance(w http.ResponseWriter, r *http.Request) {
 	body["status"] = "RUNNING"
 	body["creationTimestamp"] = time.Now().Format(time.RFC3339)
 	body["zone"] = zoneSelfLink(r, project, zone)
+
+	// Populate server-side defaults real Compute returns by default.
+	// The v5 provider's compute_instance reader derefs nested fields
+	// (networkInterfaces[].fingerprint, metadata.fingerprint, tags.fingerprint,
+	// scheduling.*, shieldedInstanceConfig.*) without nil guards —
+	// without these defaults the provider panics with "Plugin did not
+	// respond" on ApplyResourceChange. Surfaced in gcp-full-stack
+	// 2026-06-02 sweep.
+	populateComputeInstanceDefaults(body)
 
 	created, err := app.repo.CreateInstance(project, zone, body)
 	if err != nil {
