@@ -447,8 +447,12 @@ func populateNodePoolDefaults(pool map[string]any) {
 		}
 	}
 	if _, ok := cfg["diskSizeGb"]; !ok {
-		// NodeConfig.DiskSizeGb is int64,string in the v5 SDK.
-		cfg["diskSizeGb"] = "100"
+		// NodeConfig.DiskSizeGb is plain int64 (no `,string` struct
+		// tag) — wire form must be a JSON number. Sending a string
+		// triggers "cannot unmarshal string into ... of type int64".
+		// Distinct from maxPodsConstraint.maxPodsPerNode which IS
+		// tagged `,string` and must be a JSON string.
+		cfg["diskSizeGb"] = float64(100)
 	}
 	if _, ok := cfg["diskType"]; !ok {
 		cfg["diskType"] = "pd-standard"
