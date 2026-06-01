@@ -537,6 +537,15 @@ func (app *Application) RegisterRoutes(r chi.Router) {
 			r.Delete("/serviceAccounts/{email}", app.DeleteServiceAccount)
 			r.Patch("/serviceAccounts/{email}", app.UpdateServiceAccount)
 
+			// SA-level IAM (google_service_account_iam_member /
+			// _binding / _policy). Recommended substitute for the
+			// project-level IAM resources which escape to real cloud
+			// despite cloud_resource_manager_custom_endpoint + batching
+			// disabled. SA-level routes through iam.googleapis.com which
+			// fakegcp honors.
+			r.Post("/serviceAccounts/{email}:getIamPolicy", app.GetServiceAccountIamPolicy)
+			r.Post("/serviceAccounts/{email}:setIamPolicy", app.SetServiceAccountIamPolicy)
+
 			r.Post("/serviceAccounts/{email}/keys", app.CreateSAKey)
 			r.Get("/serviceAccounts/{email}/keys", app.ListSAKeys)
 			r.Get("/serviceAccounts/{email}/keys/{keyId}", app.GetSAKey)
