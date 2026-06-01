@@ -460,8 +460,20 @@ func (app *Application) RegisterRoutes(r chi.Router) {
 			r.Delete("/clusters/{cluster}/nodePools/{name}", app.DeleteNodePool)
 		})
 
-		// Cloud SQL
-		r.Route("/sql/v1beta4/projects/{project}", func(r chi.Router) {
+		// Cloud SQL. The v5 sqladmin client builds URLs by appending
+		// `projects/{project}/instances/...` to BasePath. With our
+		// host-only sql_custom_endpoint (`http://127.0.0.1:8081/`), the
+		// resulting URL is `/projects/{project}/instances/...` —
+		// WITHOUT the `/sql/v1beta4/` prefix the legacy /sql/v1beta4
+		// route used to match. Register both shapes (dual-prefix
+		// discipline from ADR-0014 in infrafactory).
+		//
+		// Surfaced by the 2026-06-02 infrafactory sweep:
+		// gcp-cloud-sql + gcp-full-stack hit
+		// `POST /projects/{project}/instances/{instance}/databases`
+		// returning 501 because the route only existed under
+		// `/sql/v1beta4/projects/...`.
+		sqlRoutes := func(r chi.Router) {
 			r.Get("/instances", app.ListSQLInstances)
 			r.Post("/instances", app.CreateSQLInstance)
 			r.Get("/instances/{name}", app.GetSQLInstance)
@@ -477,7 +489,11 @@ func (app *Application) RegisterRoutes(r chi.Router) {
 			r.Post("/instances/{instance}/users", app.CreateSQLUser)
 			r.Delete("/instances/{instance}/users", app.DeleteSQLUser)
 			r.Put("/instances/{instance}/users", app.UpdateSQLUser)
-		})
+		}
+		r.Route("/sql/v1beta4/projects/{project}", sqlRoutes)
+		// NOTE: a second registration at `/projects/{project}` is added
+		// below alongside DNS's same-prefix mount — chi rejects duplicate
+		// Route() calls at the same path, so SQL + DNS share one mount.
 
 		r.Post("/v1/projects/{project}:setIamPolicy", app.SetIAMPolicy)
 		r.Post("/v1/projects/{project}:getIamPolicy", app.GetIAMPolicy)
@@ -617,7 +633,15 @@ func (app *Application) RegisterRoutes(r chi.Router) {
 			r.Get("/managedZones/{zone}/changes/{change}", app.GetDNSChange)
 		}
 		r.Route("/dns/v1/projects/{project}", registerDNSRoutes)
-		r.Route("/projects/{project}", registerDNSRoutes)
+		// `/projects/{project}` hosts both DNS (`/managedZones/...`) and
+		// Cloud SQL (`/instances/...`) when their respective
+		// _custom_endpoint flags are host-only. chi only allows one
+		// Route() per prefix, so register both sets of sub-routes
+		// inside the same closure.
+		r.Route("/projects/{project}", func(r chi.Router) {
+			registerDNSRoutes(r)
+			sqlRoutes(r)
+		})
 
 		// Cloud Run v2
 		r.Route("/v2/projects/{project}/locations/{location}", func(r chi.Router) {

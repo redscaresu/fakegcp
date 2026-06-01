@@ -356,6 +356,46 @@ func TestSQLInstanceCRUD(t *testing.T) {
 	assertOperationDone(t, resp, body)
 }
 
+// TestSQLDualPrefix pins the host-only sql_custom_endpoint contract:
+// the v5 sqladmin client builds URLs as `/projects/{project}/...`
+// when sql_custom_endpoint is host-only (terraform-provider-google's
+// version-strip regex only fires for `https://` URLs, so the
+// `sql/v1beta4` prefix is preserved with `https://` endpoints and
+// dropped with our `http://127.0.0.1:8081/`).
+//
+// Both URL shapes must work. Surfaced by the 2026-06-02 infrafactory
+// deterministic sweep where POST /projects/{project}/instances/{instance}/databases
+// returned 501 (no route).
+func TestSQLDualPrefix(t *testing.T) {
+	srv, cleanup := testutil.NewTestServer(t)
+	defer cleanup()
+
+	// Create via legacy /sql/v1beta4 path.
+	resp, body := testutil.DoCreate(t, srv, testutil.SQLPath(project, "instances"), map[string]any{"name": "dual-prefix"})
+	assertOperationDone(t, resp, body)
+
+	// READ via host-only `/projects/{project}/instances/{name}`.
+	resp, body = testutil.DoGet(t, srv, "/projects/"+project+"/instances/dual-prefix")
+	require.Equal(t, http.StatusOK, resp.StatusCode, "GET via bare /projects prefix must work")
+	require.Equal(t, "dual-prefix", body["name"])
+
+	// CREATE database via host-only path.
+	resp, body = testutil.DoCreate(t, srv,
+		"/projects/"+project+"/instances/dual-prefix/databases",
+		map[string]any{"name": "appdb"})
+	assertOperationDone(t, resp, body)
+
+	// LIST databases via host-only path.
+	resp, body = testutil.DoGet(t, srv, "/projects/"+project+"/instances/dual-prefix/databases")
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Contains(t, body, "items")
+
+	// DELETE database via host-only path.
+	resp, body = testutil.DoDelete(t, srv,
+		"/projects/"+project+"/instances/dual-prefix/databases/appdb")
+	assertOperationDone(t, resp, body)
+}
+
 func TestSQLDatabaseCRUD(t *testing.T) {
 	srv, cleanup := testutil.NewTestServer(t)
 	defer cleanup()
