@@ -18,6 +18,7 @@ func (app *Application) ResetState(w http.ResponseWriter, r *http.Request) {
 	app.resetDNSChanges()
 	app.resetServiceNetworkingConnections()
 	resetKMSIamStore()
+	resetSAIamStore()
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }
 

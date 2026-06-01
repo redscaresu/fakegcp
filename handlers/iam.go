@@ -3,12 +3,37 @@ package handlers
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 )
+
+// saIamStore round-trips IAM policies set on service accounts. Used
+// by google_service_account_iam_member / _binding / _policy resources
+// (which hit /v1/projects/{p}/serviceAccounts/{email}:{get|set}IamPolicy).
+//
+// fakegcp can't reliably honor cloud_resource_manager_custom_endpoint
+// for project-level IAM (BatchingConfig wrapper escapes), so we
+// recommend SA-level IAM as the supported substitute. That path goes
+// through iam.googleapis.com which routes here.
+var (
+	saIamMu   sync.RWMutex
+	saIamStor = map[string]map[string]any{}
+)
+
+func saIamKey(project, email string) string {
+	return project + "/" + email
+}
+
+func resetSAIamStore() {
+	saIamMu.Lock()
+	defer saIamMu.Unlock()
+	saIamStor = map[string]map[string]any{}
+}
 
 func (app *Application) CreateServiceAccount(w http.ResponseWriter, r *http.Request) {
 	project := chi.URLParam(r, "project")
@@ -95,6 +120,62 @@ func (app *Application) DeleteServiceAccount(w http.ResponseWriter, r *http.Requ
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{})
+}
+
+// GetServiceAccountIamPolicy returns the policy stored for the SA,
+// or an empty policy if none was set. Provider's Read-after-Apply
+// uses this to verify the binding landed.
+func (app *Application) GetServiceAccountIamPolicy(w http.ResponseWriter, r *http.Request) {
+	project := chi.URLParam(r, "project")
+	email := chi.URLParam(r, "email")
+	key := saIamKey(project, email)
+	saIamMu.RLock()
+	stored := saIamStor[key]
+	saIamMu.RUnlock()
+	if stored == nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"version":      1,
+			"bindings":     []any{},
+			"auditConfigs": []any{},
+			"etag":         "BwSAInitial=",
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, stored)
+}
+
+// SetServiceAccountIamPolicy stores the requested policy under the
+// SA's storage key and returns it back. Etag rotates per Set so
+// optimistic-concurrency callers see fresh values.
+func (app *Application) SetServiceAccountIamPolicy(w http.ResponseWriter, r *http.Request) {
+	project := chi.URLParam(r, "project")
+	email := chi.URLParam(r, "email")
+	key := saIamKey(project, email)
+	body, err := decodeBody(r)
+	if err != nil {
+		writeGCPError(w, http.StatusBadRequest, "Invalid JSON body", "invalid")
+		return
+	}
+	policy, _ := body["policy"].(map[string]any)
+	if policy == nil {
+		policy = map[string]any{}
+	}
+	if _, ok := policy["bindings"]; !ok {
+		policy["bindings"] = []any{}
+	}
+	if _, ok := policy["auditConfigs"]; !ok {
+		policy["auditConfigs"] = []any{}
+	}
+	if _, ok := policy["version"]; !ok {
+		policy["version"] = float64(1)
+	}
+	policy["etag"] = fmt.Sprintf("BwSAEtag-%d=", time.Now().UnixNano())
+
+	saIamMu.Lock()
+	saIamStor[key] = policy
+	saIamMu.Unlock()
+
+	writeJSON(w, http.StatusOK, policy)
 }
 
 // UpdateServiceAccount handles the v1 PATCH that the Terraform provider
