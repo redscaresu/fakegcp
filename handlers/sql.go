@@ -8,6 +8,100 @@ import (
 	"github.com/google/uuid"
 )
 
+// populateSQLInstanceDefaults fills in nested settings sub-blocks
+// real Cloud SQL returns by default but that fakegcp's pure echo
+// handler would leave nil. terraform-provider-google v5's sqlInstance
+// reader derefs these without nil guards, panicking with "Plugin
+// did not respond" on ApplyResourceChange. Surfaced in gcp-full-stack
+// 2026-06-02 sweep.
+//
+// Caller values win — defaults only fill keys the caller omitted.
+func populateSQLInstanceDefaults(body map[string]any) {
+	settings, ok := body["settings"].(map[string]any)
+	if !ok {
+		settings = map[string]any{}
+		body["settings"] = settings
+	}
+	if _, ok := settings["activationPolicy"]; !ok {
+		settings["activationPolicy"] = "ALWAYS"
+	}
+	if _, ok := settings["availabilityType"]; !ok {
+		settings["availabilityType"] = "ZONAL"
+	}
+	if _, ok := settings["pricingPlan"]; !ok {
+		settings["pricingPlan"] = "PER_USE"
+	}
+	if _, ok := settings["replicationType"]; !ok {
+		settings["replicationType"] = "SYNCHRONOUS"
+	}
+	if _, ok := settings["storageAutoResize"]; !ok {
+		settings["storageAutoResize"] = true
+	}
+	if _, ok := settings["storageAutoResizeLimit"]; !ok {
+		settings["storageAutoResizeLimit"] = "0"
+	}
+	if _, ok := settings["deletionProtectionEnabled"]; !ok {
+		settings["deletionProtectionEnabled"] = false
+	}
+	if _, ok := settings["userLabels"]; !ok {
+		settings["userLabels"] = map[string]any{}
+	}
+	if _, ok := settings["databaseFlags"]; !ok {
+		settings["databaseFlags"] = []any{}
+	}
+	if _, ok := settings["ipConfiguration"].(map[string]any); !ok {
+		settings["ipConfiguration"] = map[string]any{
+			"ipv4Enabled":      true,
+			"authorizedNetworks": []any{},
+		}
+	} else {
+		ipc := settings["ipConfiguration"].(map[string]any)
+		if _, ok := ipc["authorizedNetworks"]; !ok {
+			ipc["authorizedNetworks"] = []any{}
+		}
+	}
+	if _, ok := settings["backupConfiguration"].(map[string]any); !ok {
+		settings["backupConfiguration"] = map[string]any{
+			"enabled":                    true,
+			"startTime":                  "00:00",
+			"binaryLogEnabled":           false,
+			"pointInTimeRecoveryEnabled": false,
+			"transactionLogRetentionDays": float64(7),
+		}
+	}
+	if _, ok := settings["maintenanceWindow"].(map[string]any); !ok {
+		settings["maintenanceWindow"] = map[string]any{
+			"day":         float64(0),
+			"hour":        float64(0),
+			"updateTrack": "stable",
+		}
+	}
+	if _, ok := settings["locationPreference"].(map[string]any); !ok {
+		settings["locationPreference"] = map[string]any{}
+	}
+	if _, ok := settings["dataDiskType"]; !ok {
+		settings["dataDiskType"] = "PD_SSD"
+	}
+	if _, ok := settings["dataDiskSizeGb"]; !ok {
+		settings["dataDiskSizeGb"] = "10"
+	}
+	// settingsVersion is a server-side optimistic-concurrency token;
+	// the provider keys planning off this — without it the Update
+	// path passes an empty version and Cloud SQL real returns 412.
+	if _, ok := settings["settingsVersion"]; !ok {
+		settings["settingsVersion"] = "1"
+	}
+
+	if _, ok := body["serverCaCert"].(map[string]any); !ok {
+		body["serverCaCert"] = map[string]any{
+			"kind": "sql#sslCert",
+		}
+	}
+	if _, ok := body["serviceAccountEmailAddress"]; !ok {
+		body["serviceAccountEmailAddress"] = "p-cloud-sql@gserviceaccount.com"
+	}
+}
+
 func sqlOperation(project, targetLink, opType string) map[string]any {
 	return map[string]any{
 		"kind":          "sql#operation",
@@ -47,6 +141,14 @@ func (app *Application) CreateSQLInstance(w http.ResponseWriter, r *http.Request
 		"ipAddress": fmt.Sprintf("10.%d.%d.%d", randomIPv4Octet(), randomIPv4Octet(), randomIPv4Octet()),
 	}}
 	body["selfLink"] = selfLink(r, "sql", "v1beta4", "projects", project, "instances", name)
+
+	// Populate server-side defaults real Cloud SQL would emit. The v5
+	// provider's sqlInstance reader derefs nested fields without nil
+	// guards (settings.activationPolicy, settings.backupConfiguration.*,
+	// settings.ipConfiguration.*, settings.maintenanceWindow.*) —
+	// without these defaults the provider panics with "Plugin did
+	// not respond" on ApplyResourceChange.
+	populateSQLInstanceDefaults(body)
 
 	created, err := app.repo.CreateSQLInstance(project, body)
 	if err != nil {
