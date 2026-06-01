@@ -31,15 +31,22 @@ func (app *Application) CreateServiceAccount(w http.ResponseWriter, r *http.Requ
 	}
 
 	email := accountID + "@" + project + ".iam.gserviceaccount.com"
+	uniqueID := numericID()
 	data := map[string]any{
-		"accountId": accountID,
-		"email":     email,
-		"uniqueId":  numericID(),
-		"name":      "projects/" + project + "/serviceAccounts/" + email,
-		"projectId": project,
+		"accountId":      accountID,
+		"email":          email,
+		"uniqueId":       uniqueID,
+		"name":           "projects/" + project + "/serviceAccounts/" + email,
+		"projectId":      project,
+		"oauth2ClientId": uniqueID,
+		"disabled":       false,
+		"etag":           "BwSAEtag=",
 	}
 	if displayName, ok := saData["displayName"].(string); ok && displayName != "" {
 		data["displayName"] = displayName
+	}
+	if description, ok := saData["description"].(string); ok {
+		data["description"] = description
 	}
 
 	created, err := app.repo.CreateServiceAccount(project, data)

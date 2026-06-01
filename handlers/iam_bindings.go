@@ -88,6 +88,7 @@ func (app *Application) SetIAMPolicy(w http.ResponseWriter, r *http.Request) {
 		writeDomainError(w, err)
 		return
 	}
+	padIAMPolicy(updated)
 	writeJSON(w, http.StatusOK, updated)
 }
 
@@ -99,5 +100,21 @@ func (app *Application) GetIAMPolicy(w http.ResponseWriter, r *http.Request) {
 		writeDomainError(w, err)
 		return
 	}
+	padIAMPolicy(policy)
 	writeJSON(w, http.StatusOK, policy)
+}
+
+// padIAMPolicy ensures the response shape matches real GCP's
+// cloudresourcemanager.Policy. The v5 provider's google_project_iam_*
+// resources unmarshal into a Policy struct that includes auditConfigs;
+// when missing, providers that read auditConfigs[*].auditLogConfigs
+// panic on the nil deref. Adds an empty array — no behaviour change
+// for callers that don't audit.
+func padIAMPolicy(policy map[string]any) {
+	if policy == nil {
+		return
+	}
+	if _, ok := policy["auditConfigs"]; !ok {
+		policy["auditConfigs"] = []any{}
+	}
 }
