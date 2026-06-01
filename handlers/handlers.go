@@ -442,6 +442,14 @@ func (app *Application) RegisterRoutes(r chi.Router) {
 			r.Patch("/{keyRing}/cryptoKeys/{cryptoKey}", app.KMSUpdateCryptoKey)
 			r.Post("/{keyRing}/cryptoKeys/{cryptoKey}:getIamPolicy", app.KMSGetIamPolicy)
 			r.Post("/{keyRing}/cryptoKeys/{cryptoKey}:setIamPolicy", app.KMSSetIamPolicy)
+			// cryptoKeyVersions — list + individual GET + :destroy. The
+			// terraform-provider-google destroy path enumerates versions
+			// before scheduling each for destruction; without these
+			// routes the destroy 501s and the scenario stays stuck.
+			// Surfaced in gcp-cloud-sql / gcp-storage CMEK flows.
+			r.Get("/{keyRing}/cryptoKeys/{cryptoKey}/cryptoKeyVersions", app.KMSListCryptoKeyVersions)
+			r.Get("/{keyRing}/cryptoKeys/{cryptoKey}/cryptoKeyVersions/{version}", app.KMSGetCryptoKeyVersion)
+			r.Post("/{keyRing}/cryptoKeys/{cryptoKey}/cryptoKeyVersions/{version}:destroy", app.KMSDestroyCryptoKeyVersion)
 		}
 		r.Route("/v1/projects/{project}/locations/{location}/keyRings", registerKMSRoutes)
 		r.Route("/projects/{project}/locations/{location}/keyRings", registerKMSRoutes)

@@ -17,6 +17,7 @@ func (app *Application) ResetState(w http.ResponseWriter, r *http.Request) {
 	// from repo state.
 	app.resetDNSChanges()
 	app.resetServiceNetworkingConnections()
+	resetKMSIamStore()
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }
 
