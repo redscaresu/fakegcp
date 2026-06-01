@@ -307,6 +307,20 @@ func (app *Application) CreateNodePool(w http.ResponseWriter, r *http.Request) {
 		"/zones/" + igmZone + "/instanceGroupManagers/" + igmName
 	poolData["instanceGroupUrls"] = []any{igmURL}
 
+	// Populate sub-blocks real GKE returns by default. The v5 provider's
+	// nodePool reader derefs nested fields (management.autoUpgrade,
+	// upgradeSettings.maxSurge, maxPodsConstraint.maxPodsPerNode,
+	// networkConfig.podIpv4CidrBlock, config.metadata) without nil
+	// guards — without these defaults the provider panics with
+	// "Plugin did not respond" on ApplyResourceChange. Surfaced in
+	// gcp-gke-cluster + gcp-full-stack 2026-06-02 sweeps.
+	populateNodePoolDefaults(poolData)
+	// Echo the same defaults from the cluster's networkConfig so
+	// derefs like pool.NetworkConfig.PodIpv4CidrBlock find a value.
+	if clusterData, err := app.repo.GetCluster(project, location, cluster); err == nil {
+		populateNodePoolNetworkConfig(poolData, clusterData)
+	}
+
 	if _, err := app.repo.CreateNodePool(project, location, cluster, poolData); err != nil {
 		writeCreateError(w, err)
 		return
@@ -358,6 +372,120 @@ func (app *Application) DeleteNodePool(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, gkeOperation(r, project, location, "clusters/"+cluster+"/nodePools", name, "DELETE_NODE_POOL"))
+}
+
+// populateNodePoolDefaults fills in sub-blocks real GKE returns by
+// default but that fakegcp's pure echo handler would leave nil.
+// terraform-provider-google v5's nodePool reader derefs nested
+// fields without nil guards — without these defaults the provider
+// panics with "Plugin did not respond" on ApplyResourceChange.
+//
+// The defaults mirror real GKE Standard cluster behaviour:
+//   - management: autoUpgrade + autoRepair enabled
+//   - upgradeSettings: surge upgrade strategy (1/0)
+//   - maxPodsConstraint: 110 pods per node (real GKE default)
+//   - config.metadata: empty map (provider iterates over it)
+//   - config.tags: empty array
+//   - config.oauthScopes: cloud-platform (provider iterates)
+//   - config.labels: empty map
+//   - config.taints: empty array
+//   - networkConfig: empty sub-block; per-key population pulled
+//     from the parent cluster in populateNodePoolNetworkConfig
+func populateNodePoolDefaults(pool map[string]any) {
+	if _, ok := pool["management"]; !ok {
+		pool["management"] = map[string]any{
+			"autoUpgrade": true,
+			"autoRepair":  true,
+		}
+	}
+	if _, ok := pool["upgradeSettings"]; !ok {
+		pool["upgradeSettings"] = map[string]any{
+			"maxSurge":       float64(1),
+			"maxUnavailable": float64(0),
+			"strategy":       "SURGE",
+		}
+	}
+	if _, ok := pool["maxPodsConstraint"]; !ok {
+		pool["maxPodsConstraint"] = map[string]any{
+			"maxPodsPerNode": float64(110),
+		}
+	}
+	if _, ok := pool["podIpv4CidrSize"]; !ok {
+		pool["podIpv4CidrSize"] = float64(24)
+	}
+
+	// config sub-block — ensure required nested maps/arrays exist
+	// so provider derefs find non-nil values.
+	cfg, ok := pool["config"].(map[string]any)
+	if !ok {
+		cfg = map[string]any{}
+		pool["config"] = cfg
+	}
+	if _, ok := cfg["metadata"]; !ok {
+		cfg["metadata"] = map[string]any{}
+	}
+	if _, ok := cfg["labels"]; !ok {
+		cfg["labels"] = map[string]any{}
+	}
+	if _, ok := cfg["resourceLabels"]; !ok {
+		cfg["resourceLabels"] = map[string]any{}
+	}
+	if _, ok := cfg["tags"]; !ok {
+		cfg["tags"] = []any{}
+	}
+	if _, ok := cfg["taints"]; !ok {
+		cfg["taints"] = []any{}
+	}
+	if _, ok := cfg["oauthScopes"]; !ok {
+		cfg["oauthScopes"] = []any{
+			"https://www.googleapis.com/auth/cloud-platform",
+		}
+	}
+	if _, ok := cfg["diskSizeGb"]; !ok {
+		cfg["diskSizeGb"] = float64(100)
+	}
+	if _, ok := cfg["diskType"]; !ok {
+		cfg["diskType"] = "pd-standard"
+	}
+	if _, ok := cfg["imageType"]; !ok {
+		cfg["imageType"] = "COS_CONTAINERD"
+	}
+	if _, ok := cfg["serviceAccount"]; !ok {
+		cfg["serviceAccount"] = "default"
+	}
+	if _, ok := cfg["shieldedInstanceConfig"]; !ok {
+		cfg["shieldedInstanceConfig"] = map[string]any{
+			"enableSecureBoot":          false,
+			"enableIntegrityMonitoring": true,
+		}
+	}
+	if _, ok := cfg["workloadMetadataConfig"]; !ok {
+		cfg["workloadMetadataConfig"] = map[string]any{"mode": "GKE_METADATA"}
+	}
+}
+
+// populateNodePoolNetworkConfig copies networkConfig.podIpv4CidrBlock
+// (or a sensible default) into the pool so the provider's networkConfig
+// deref returns a value instead of nil.
+func populateNodePoolNetworkConfig(pool map[string]any, cluster map[string]any) {
+	nc, ok := pool["networkConfig"].(map[string]any)
+	if !ok {
+		nc = map[string]any{}
+		pool["networkConfig"] = nc
+	}
+	if _, ok := nc["podIpv4CidrBlock"]; !ok {
+		if clusterNC, ok := cluster["networkConfig"].(map[string]any); ok {
+			if v, ok := clusterNC["clusterIpv4CidrBlock"].(string); ok && v != "" {
+				nc["podIpv4CidrBlock"] = v
+			}
+		}
+		if _, ok := nc["podIpv4CidrBlock"]; !ok {
+			nc["podIpv4CidrBlock"] = "10.0.0.0/14"
+		}
+	}
+	if _, ok := nc["enablePrivateNodes"]; !ok {
+		nc["enablePrivateNodes"] = false
+	}
 }
 
 // stripEmptyClusterSubObjects mirrors stripEmptyDNSZoneSubObjects /
