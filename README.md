@@ -235,6 +235,7 @@ fakegcp/
 - [`SECURITY.md`](SECURITY.md) — disclosure policy
 - [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) — community standards
 - [`CHANGELOG.md`](CHANGELOG.md) — Keep a Changelog format
+- [`infrafactory's auto-learning loop`](https://github.com/redscaresu/infrafactory/blob/main/docs/auto-learning-loop.md) — deep-dive on how infrafactory turns fakegcp failures (and its own LLM-generated HCL mistakes) into durable pitfalls. The S78 GCP-escape carve-out (routes `access_token_type_unsupported` failures on specific fakegcp-unsupportable resources to the pitfalls system rather than mock-gaps) is documented as a worked architectural example in that doc.
 
 ## Status
 
