@@ -108,6 +108,14 @@ Gating: `FAKEGCP_ENABLE_E2E=1`. Without the env var, the test `t.Skip`s with a c
 
 **When you add a new resource handler**: add an `examples/working/<resource>/` config that exercises CRUD. If your handler models a documented error path, add an `examples/misconfigured/<resource>/` config + `expected.txt`. If your handler has Update semantics distinct from Create, add an `examples/updates/<resource>/` v1→v2 pair.
 
+## Fidelity strategy
+
+fakegcp is **hybrid**: handler shapes were discovered through a mix of (a) `terraform-provider-google` source reading, (b) GCP discovery documents (Google's OpenAPI equivalent), and (c) provider-as-validator via the smoke harness. Discovery docs are referenced ad-hoc — there's no `specs/` tree.
+
+This works but has slower per-resource discovery than mockway's spec-driven pattern. **For new handlers**, consider downloading the relevant GCP discovery doc (e.g. `https://compute.googleapis.com/$discovery/rest?version=v1` for compute) and committing into `specs/` — same shape as mockway. Existing handlers are stable; opportunistic upgrade rather than mandatory rework.
+
+**Comparison with sibling fakes**: mockway is fully spec-driven (`specs/` tree, "Reverse fidelity" rule); fakeaws is reactive (provider source + `TF_LOG=DEBUG` capture). See `../infrafactory/AGENTS.md` § "Sibling-fake fidelity strategies".
+
 ## API Fidelity Principles
 
 Same philosophy as mockway:
