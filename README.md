@@ -161,7 +161,7 @@ make clean
 make run            # build + run on :8080
 ```
 
-`make test-coverage` excludes the `repository` and `models` packages from coverage instrumentation since they have no tests yet (S41-T2 will fill that in). Current handlers package coverage: ~64%.
+`make test-coverage` excludes the `models` package from coverage instrumentation since it has no behavior to test (just type definitions). The `repository` package has its own test suite (`repository/repository_test.go`, 27 test functions covering CRUD + FK enforcement + cascade deletes + reset). Current handlers package coverage: ~64%.
 
 ## API compatibility
 
