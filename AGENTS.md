@@ -90,6 +90,24 @@ go test ./...                                    # unit + integration
 go test -tags provider_e2e ./e2e -v             # e2e (needs terraform/tofu in PATH)
 ```
 
+## Provider smoke harness
+
+`examples/provider_smoke_test.go` is the canonical wire-fidelity gate. Every directory under `examples/{working,misconfigured,updates}/` is auto-discovered and run through a per-tree contract. **No real GCP credentials needed** — the real `hashicorp/google` provider binary runs against this fake; if the provider's CRUD lifecycle works, the wire shape is correct by construction.
+
+| Tree | Contract |
+|---|---|
+| `examples/working/<svc>/` | `tofu apply → plan -detailed-exitcode (no diff) → destroy` |
+| `examples/misconfigured/<svc>/` | `tofu apply` MUST fail; if `expected.txt` is present, output MUST contain that fragment (e.g. `googleapi: Error 404`) |
+| `examples/updates/<svc>/` | `tofu apply -var-file=v1.tfvars → plan no-op → apply -var-file=v2.tfvars → plan no-op → destroy` (idempotency under change) |
+
+For every example dir the test starts a fresh `fakegcp` binary on a free port (no shared mock state across dirs), copies the example into a temp dir, and rewrites `localhost:8080` in `providers.tf` to point at the per-test port. Each subdir is its own `t.Run` sub-test.
+
+Gating: `FAKEGCP_ENABLE_E2E=1`. Without the env var, the test `t.Skip`s with a clear message.
+
+`examples/known_broken.yaml` is the only-shrink allowlist: dirs listed there are *expected* to drift and don't fail the gate. If a listed dir stops drifting, the test fails ("congratulations, remove this entry") — ratchet-only-tighten.
+
+**When you add a new resource handler**: add an `examples/working/<resource>/` config that exercises CRUD. If your handler models a documented error path, add an `examples/misconfigured/<resource>/` config + `expected.txt`. If your handler has Update semantics distinct from Create, add an `examples/updates/<resource>/` v1→v2 pair.
+
 ## API Fidelity Principles
 
 Same philosophy as mockway:
