@@ -86,7 +86,7 @@ in action is via [`infrafactory`](https://github.com/redscaresu/infrafactory)'s
 `make up`:
 
 ```bash
-cd ~/dev && for r in infrafactory fakeaws fakegcp mockway; do git clone https://github.com/redscaresu/$r.git; done
+cd ~/dev && for r in infrafactory fakeaws fakegcp fakegenesys mockway; do git clone https://github.com/redscaresu/$r.git; done
 cd infrafactory && make up
 ./bin/infrafactory run scenarios/training/gcp-storage.yaml --config infrafactory.yaml   # drives fakegcp end-to-end
 make down
