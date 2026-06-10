@@ -39,7 +39,7 @@ import (
 // TestClusterDeleteCascadesNodePools: deleting a GKE cluster wipes
 // every nodePool underneath it (container_node_pools has ON DELETE
 // CASCADE on the cluster FK).
-func TestClusterDeleteCascadesNodePools(t *testing.T) {
+func TestContract_cluster_cascade_deletes_nodepools(t *testing.T) {
 	srv, cleanup := testutil.NewTestServer(t)
 	defer cleanup()
 
@@ -71,7 +71,7 @@ func TestClusterDeleteCascadesNodePools(t *testing.T) {
 
 // TestSQLInstanceDeleteCascadesDatabases: deleting a Cloud SQL
 // instance wipes every database underneath it.
-func TestSQLInstanceDeleteCascadesDatabases(t *testing.T) {
+func TestContract_sql_instance_cascade_deletes_databases(t *testing.T) {
 	srv, cleanup := testutil.NewTestServer(t)
 	defer cleanup()
 
@@ -102,7 +102,7 @@ func TestSQLInstanceDeleteCascadesDatabases(t *testing.T) {
 // parent instance GET returns 404 AND ListSQLUsers against the
 // missing parent now returns 404 (matches real Cloud SQL —
 // instanceNotFound on the parent surfaces at the children endpoint).
-func TestSQLInstanceDeleteCascadesUsers(t *testing.T) {
+func TestContract_sql_instance_cascade_deletes_users(t *testing.T) {
 	srv, cleanup := testutil.NewTestServer(t)
 	defer cleanup()
 
@@ -139,7 +139,7 @@ func TestSQLInstanceDeleteCascadesUsers(t *testing.T) {
 // account wipes every key it owns. Extends the existing
 // TestSADeleteCascadesKeys (which only asserts the DELETE returns
 // 200) with a post-delete GET → 404 on the key.
-func TestServiceAccountDeleteCascadesKeys(t *testing.T) {
+func TestContract_service_account_cascade_deletes_keys(t *testing.T) {
 	srv, cleanup := testutil.NewTestServer(t)
 	defer cleanup()
 

@@ -208,6 +208,17 @@ func (app *Application) UpdateSQLInstance(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, sqlOperation(project, getString(updated, "selfLink"), "UPDATE"))
 }
 
+// CRITICAL[sql-instance-cascade-deletes-databases]: deleting a Cloud
+// SQL instance MUST cascade-delete all of its databases. Real Cloud
+// SQL drops the whole instance atomically; the terraform-provider-
+// google's destroy reads /databases after the parent delete and
+// expects 404 on each child. Leaving orphan database rows = destroys
+// hang until timeout. Locked in by
+// TestContract_sql_instance_cascade_deletes_databases.
+//
+// CRITICAL[sql-instance-cascade-deletes-users]: same invariant for
+// the users sub-resource. Locked in by
+// TestContract_sql_instance_cascade_deletes_users.
 func (app *Application) DeleteSQLInstance(w http.ResponseWriter, r *http.Request) {
 	project := chi.URLParam(r, "project")
 	name := chi.URLParam(r, "name")
