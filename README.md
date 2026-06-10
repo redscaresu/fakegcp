@@ -163,6 +163,33 @@ make run            # build + run on :8080
 
 `make test-coverage` excludes the `models` package from coverage instrumentation since it has no behavior to test (just type definitions). The `repository` package has its own test suite (`repository/repository_test.go`, 27 test functions covering CRUD + FK enforcement + cascade deletes + reset). Current handlers package coverage: ~64%.
 
+## Testing examples
+
+The canonical entry point for end-to-end example coverage is `go test ./examples/...`:
+
+```bash
+# Run every example end-to-end (apply → plan-no-op → destroy)
+FAKEGCP_ENABLE_E2E=1 go test ./examples/...
+
+# Run one specific example, with verbose output
+FAKEGCP_ENABLE_E2E=1 go test ./examples/... -v -run TestProviderSmokeWorking/<dir>
+
+# Filter to a single sub-tree
+FAKEGCP_ENABLE_E2E=1 go test ./examples/... -run TestProviderSmokeMisconfigured
+```
+
+The harness builds the `fakegcp` binary once and spawns a fresh
+instance on a kernel-assigned port per example, so dirs can't
+cross-contaminate state. The `scripts/e2e.sh` script is a
+supplementary manual debugging aid — the in-test path above is
+authoritative.
+
+The same in-test pattern is canonical across all four sibling fakes
+([mockway](https://github.com/redscaresu/mockway),
+[fakeaws](https://github.com/redscaresu/fakeaws),
+[fakegenesys](https://github.com/redscaresu/fakegenesys)) — `go test`
+against the smoke harness works identically in each.
+
 ## API compatibility
 
 The point of fakegcp is to be wire-shape compatible with the real `hashicorp/google` provider — every byte the provider sends or expects to receive must match what real GCP would do, or the provider detects "drift" and the apply loop fails. Three guardrails enforce this; they're identical across [`mockway`](https://github.com/redscaresu/mockway) (Scaleway), [`fakegcp`](https://github.com/redscaresu/fakegcp) (GCP), and [`fakeaws`](https://github.com/redscaresu/fakeaws) (AWS).
