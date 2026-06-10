@@ -114,7 +114,11 @@ fakegcp is **hybrid**: handler shapes were discovered through a mix of (a) `terr
 
 This works but has slower per-resource discovery than mockway's spec-driven pattern. **For new handlers**, consider downloading the relevant GCP discovery doc (e.g. `https://compute.googleapis.com/$discovery/rest?version=v1` for compute) and committing into `specs/` — same shape as mockway. Existing handlers are stable; opportunistic upgrade rather than mandatory rework.
 
-**Comparison with sibling fakes**: mockway is fully spec-driven (`specs/` tree, "Reverse fidelity" rule); fakeaws is reactive (provider source + `TF_LOG=DEBUG` capture). See `../infrafactory/AGENTS.md` § "Sibling-fake fidelity strategies".
+**Comparison with sibling fakes**: mockway is fully spec-driven (`specs/` tree, "Reverse fidelity" rule); fakeaws is reactive (provider source + `TF_LOG=DEBUG` capture); fakegenesys mirrors mockway's spec-driven approach via a filtered Genesys OpenAPI doc. See `../infrafactory/AGENTS.md` § "Sibling-fake fidelity strategies".
+
+## Contract-coverage convention (canonical across all 4 sibling fakes)
+
+`handlers/contract_audit_test.go` enforces the `CRITICAL[<id>]:` / `MUST[<id>]:` docstring → `TestContract_<id>` test pairing across `handlers/*.go`. A wire-shape invariant the consuming `terraform-provider-google` depends on must NOT live as a comment alone — drift becomes a failed `go test`, not a missed code review. Current contracts (as of S129 fakegcp sibling rollout): `cluster-cascade-deletes-nodepools`, `sql-instance-cascade-deletes-databases`, `sql-instance-cascade-deletes-users`, `service-account-cascade-deletes-keys`. Same convention live across mockway/fakeaws/fakegenesys.
 
 ## API Fidelity Principles
 
