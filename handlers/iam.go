@@ -110,6 +110,13 @@ func (app *Application) ListServiceAccounts(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, map[string]any{"accounts": items})
 }
 
+// CRITICAL[service-account-cascade-deletes-keys]: deleting a service
+// account MUST cascade-delete all of its keys (sa_keys). Real Cloud
+// IAM removes the account and its keys atomically; the terraform-
+// provider-google's destroy reads /keys after the parent delete and
+// expects 404 on each child. Orphan keys would block subsequent
+// service-account-with-same-name creates and confuse policy bindings.
+// Locked in by TestContract_service_account_cascade_deletes_keys.
 func (app *Application) DeleteServiceAccount(w http.ResponseWriter, r *http.Request) {
 	project := chi.URLParam(r, "project")
 	email := chi.URLParam(r, "email")

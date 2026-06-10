@@ -247,6 +247,13 @@ func (app *Application) UpdateCluster(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, gkeOperation(r, project, location, "clusters", name, "UPDATE_CLUSTER"))
 }
 
+// CRITICAL[cluster-cascade-deletes-nodepools]: deleting a GKE cluster
+// MUST cascade-delete all of its node pools. Real GKE deletes the
+// cluster + its pools atomically; the terraform-provider-google's
+// destroy waits for /nodePools/{name} to return 404 after a cluster
+// delete. If the cascade silently leaves orphan node-pool rows behind,
+// every cluster-with-pool scenario's destroy hangs until timeout.
+// Locked in by TestContract_cluster_cascade_deletes_nodepools.
 func (app *Application) DeleteCluster(w http.ResponseWriter, r *http.Request) {
 	project := chi.URLParam(r, "project")
 	location := chi.URLParam(r, "location")
