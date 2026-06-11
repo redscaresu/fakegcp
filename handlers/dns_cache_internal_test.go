@@ -1,6 +1,11 @@
 package handlers
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
 
 // TestResetDNSChangesNilsSnapshot pins the consistency fix from
 // pass 18: resetDNSChanges must clear both the live cache and
@@ -17,31 +22,21 @@ func TestResetDNSChangesNilsSnapshot(t *testing.T) {
 		},
 	}
 	app.snapshotDNSChanges()
-	if app.dnsChangesSnapshot == nil {
-		t.Fatal("snapshot did not capture baseline")
-	}
+	require.NotNil(t, app.dnsChangesSnapshot, "snapshot did not capture baseline")
 
 	app.resetDNSChanges()
 
-	if len(app.dnsChanges) != 0 {
-		t.Errorf("live cache not cleared: %v", app.dnsChanges)
-	}
-	if app.dnsChangesSnapshot != nil {
-		t.Errorf("snapshot baseline not cleared: %v", app.dnsChangesSnapshot)
-	}
+	assert.Empty(t, app.dnsChanges, "live cache not cleared")
+	assert.Nil(t, app.dnsChangesSnapshot, "snapshot baseline not cleared")
 
 	// Re-snapshot after reset must capture the new (empty) state,
 	// not the pre-reset baseline.
 	app.snapshotDNSChanges()
-	if len(app.dnsChangesSnapshot) != 0 {
-		t.Errorf("re-snapshot did not capture empty post-reset state: %v", app.dnsChangesSnapshot)
-	}
+	assert.Empty(t, app.dnsChangesSnapshot, "re-snapshot did not capture empty post-reset state")
 
 	// And restore from that empty baseline must leave the cache
 	// empty, not resurrect the pre-reset entry.
 	app.dnsChanges["p/z/after"] = map[string]any{"id": "after"}
 	app.restoreDNSChanges()
-	if len(app.dnsChanges) != 0 {
-		t.Errorf("restore did not roll cache back to empty: %v", app.dnsChanges)
-	}
+	assert.Empty(t, app.dnsChanges, "restore did not roll cache back to empty")
 }
