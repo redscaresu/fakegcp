@@ -136,6 +136,25 @@ Each `examples/working/<service>` directory has a `providers.tf` set up with jus
 
 `Authorization: Bearer <anything>` is accepted on all GCP routes; admin routes are unauthenticated.
 
+### Driving real terraform/tofu against the mock
+
+The repo ships `make demo-*` targets that wire up the env + drive a real
+`hashicorp/google` provider through a full lifecycle against fakegcp.
+Useful for blog demos and manual exploration.
+
+```bash
+make build              # one-time
+make demo-apply         # boots fakegcp + init + apply + plan-no-op (secret_manager)
+make demo-apply EXAMPLE=iam
+make demo-shell         # bash subshell with env set + cd'd to example
+make demo-help          # full target list + available examples
+make demo-down          # kill fakegcp + clean temp files
+```
+
+The `plan -detailed-exitcode == 0` check at the end of `demo-apply` is the
+correctness oracle — drift in any wire-shape detail (case-sensitive JSON
+keys, exact status codes, default fields) surfaces here.
+
 ## Admin endpoints
 
 | Route | Method | Purpose |
